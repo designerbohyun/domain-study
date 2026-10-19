@@ -23,7 +23,7 @@
   <h1>2회차 · SM, CUDA Core, Tensor Core, Occupancy</h1>
   <p>지난 1회차에서는 GPU 칩이 GPC, TPC, SM 순서로 쌓여 있다는 것을 봤습니다. 오늘은 그중 실제로 계산을 하는 SM 안으로 들어가 보겠습니다. 이어서 SM 안의 계산 유닛인 CUDA Core와 Tensor Core를 차례로 봅니다. 마지막으로 SM을 얼마나 채워 쓰는지 재는 Occupancy까지 살펴보겠습니다.</p><p>진행 순서는 1회차와 같습니다. 주제마다 아래 열 가지를 차례대로 짚습니다. 기준 제품은 1회차와 마찬가지로 NVIDIA <button class="t" data-t="h100">H100</button>입니다.</p>
   <div class="flow" aria-label="주제별 진행 순서">
-    <span><b>1</b>정의</span><span><b>2</b>등장 배경</span><span><b>3</b>구조</span><span><b>4</b>작동 방식</span><span><b>5</b>이점</span><span><b>6</b>부재 시 문제</span><span><b>7</b>단점</span><span><b>8</b>대안 기술</span><span><b>9</b>대안과의 비교</span><span><b>10</b>실무 관점</span>
+    <span><b>1</b>정의</span><span><b>2</b>등장 배경</span><span><b>3</b>구조</span><span><b>4</b>작동 방식</span><span><b>5</b>이점</span><span><b>6</b>부재 시 문제</span><span><b>7</b>단점</span><span><b>8</b>대안 기술</span><span><b>9</b>대안과의 비교</span><span><b>10</b>최신 트렌드</span>
   </div>
 </header>
 
@@ -204,7 +204,7 @@
       <li><b>확장이 쉽습니다:</b> 같은 SM 설계로 개수만 바꿔 여러 제품을 만듭니다. 같은 세대인데 RTX 4060은 24개, RTX 4090은 128개입니다.</li>
       <li><b>수율을 지킵니다:</b> 결함이 난 SM만 끄고 팔 수 있습니다.</li>
       <li><b>기다림을 숨깁니다:</b> SM마다 수십 개의 warp를 대기시켜 번갈아 실행합니다.</li>
-      <li><b>나눠 쓰기 좋습니다:</b> SM 단위로 GPU를 쪼개는 <button class="t" data-t="mig">MIG</button>가 가능합니다. 1.10에서 봅니다.</li>
+      <li><b>나눠 쓰기 좋습니다:</b> SM 단위로 GPU를 쪼개는 <button class="t" data-t="mig">MIG</button>, 즉 Multi-Instance GPU가 가능합니다. A100부터 GPU 한 장을 최대 7개로 나눕니다.</li>
     </ul>
   </div>
 </section>
@@ -248,7 +248,7 @@
   <h3>2. MIG · <button class="t" data-t="mps">MPS</button></h3>
   <div class="prose"><ul>
     <li><b>뜻:</b> GPU를 나누거나 여러 작업을 동시에 올려서 노는 SM을 줄입니다.</li>
-    <li><b>해결하는 단점:</b> 작은 작업이 GPU를 다 채우지 못하는 문제를 줄입니다. 1.10에서 비교합니다.</li>
+    <li><b>해결하는 단점:</b> 작은 작업이 GPU를 다 채우지 못하는 문제를 줄입니다. 자세한 설정은 14회차에서 다룹니다.</li>
   </ul></div>
   <h3>3. 라이브러리 자동 튜닝</h3>
   <div class="prose"><ul>
@@ -273,61 +273,33 @@
 </section>
 
 <section class="ch" id="s1-10">
-  <div class="ch-head"><span class="ch-num">1.10</span><h2>실무 관점</h2></div>
-
-  <h3>1. 제품 볼 때: SM 수와 형태</h3>
+  <div class="ch-head"><span class="ch-num">1.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. SM 수는 계속 늘고, 칩은 둘로 나뉩니다</h3>
+  <div class="prose"><ul>
+    <li>세대마다 SM 수가 늘었습니다. H100 SXM은 132개, B200은 148개, 2026년에 나온 Rubin은 224개입니다.</li>
+    <li>B200부터는 큰 칩 두 개를 붙여 GPU 하나처럼 씁니다. 칩 하나로는 더 키우기 어려워졌기 때문입니다.</li>
+  </ul></div>
   <div class="tbl"><table>
-    <thead><tr><th>형태</th><th>꽂는 곳</th><th>최대 전력</th><th>켜진 SM</th><th>특징</th></tr></thead>
+    <thead><tr><th>세대</th><th>제품</th><th>출시</th><th>켜진 SM</th></tr></thead>
     <tbody>
-      <tr><td><button class="t" data-t="sxm">SXM</button></td><td>전용 서버 보드</td><td class="num">700W</td><td class="num">132개</td><td>GPU끼리 <button class="t" data-t="nvlink">NVLink</button>로 연결. 더 빠름</td></tr>
-      <tr><td><button class="t" data-t="pcie">PCIe</button></td><td>일반 서버 슬롯 (카드형)</td><td class="num">350W</td><td class="num">114개</td><td>설치가 쉽지만 성능이 낮음</td></tr>
+      <tr><td>Hopper</td><td>H100 SXM</td><td class="num">2022</td><td class="num">132개</td></tr>
+      <tr><td>Blackwell</td><td>B200</td><td class="num">2024</td><td class="num">148개 (칩 2개)</td></tr>
+      <tr><td>Rubin</td><td>Rubin</td><td class="num">2026</td><td class="num">224개 (칩 2개)</td></tr>
     </tbody>
   </table></div>
-
-  <h3>2. 모니터링: GPU-Util의 함정</h3>
-  <p class="lead"><b>nvidia-smi의 <button class="t" data-t="gpuutil">GPU-Util</button> 100%는 GPU를 꽉 채워 쓴다는 뜻이 아닙니다.</b> 작업이 하나라도 돈 시간의 비율이라, SM 1개만 일해도 100%가 나옵니다.</p>
-  <figure class="fig">
-    <div class="fig-title">같은 GPU, 다른 작업: 지표가 이렇게 다르게 나옵니다</div>
-    <div class="seg" id="m-scen"></div>
-    <div class="split">
-      <div class="scroll-x"><svg id="mSvg" viewBox="0 0 400 190" width="100%" role="img" aria-label="SM 132개의 사용 상태"></svg></div>
-      <div class="bars" id="m-bars"></div>
-    </div>
-    <div class="note" id="m-desc"></div>
-    <figcaption>값은 지표의 뜻을 보여 주기 위한 예시입니다. 왼쪽 그림은 SM 132칸이고, 진할수록 SM 안이 꽉 차 있습니다.</figcaption>
-  </figure>
-  <div class="tbl"><table>
-    <thead><tr><th>지표</th><th>무엇을 재나</th><th>도구</th></tr></thead>
-    <tbody>
-      <tr><td>GPU-Util</td><td>작업이 하나라도 돌았던 시간 비율</td><td>nvidia-smi</td></tr>
-      <tr><td><button class="t" data-t="smactive">SM Active</button></td><td>일감을 받은 SM의 비율</td><td>DCGM</td></tr>
-      <tr><td><button class="t" data-t="smocc">SM Occupancy</button></td><td>SM 안을 얼마나 채웠나</td><td>DCGM</td></tr>
-      <tr><td><button class="t" data-t="tensoractive">Tensor Active</button></td><td>Tensor Core가 일한 비율</td><td>DCGM</td></tr>
-      <tr><td><button class="t" data-t="mfu">MFU</button></td><td>이론 최대 성능 대비 실제 성능</td><td>학습 코드에서 계산</td></tr>
-    </tbody>
-  </table></div>
-  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>GPU-Util만 보지 말고, <button class="t" data-t="dcgm">DCGM</button>으로 SM Active, SM Occupancy, Tensor Active를 함께 봅니다.</b> 보통 DCGM Exporter, Prometheus, Grafana 순서로 모아서 봅니다.</div>
-  <details>
-    <summary>Q. 기초 · nvidia-smi와 DCGM은 어디서 보나요?</summary>
-    <div class="prose"><p>nvidia-smi는 GPU 서버의 터미널에서 바로 실행하는 명령입니다. DCGM은 NVIDIA의 상세 모니터링 도구로, 쿠버네티스에서는 DCGM Exporter로 지표를 Prometheus에 모으고 Grafana로 봅니다. 설치와 운영은 13회차에서 다룹니다.</p></div>
-  </details>
-
-  <h3>3. GPU 나눠 쓰기</h3>
-  <p class="prose">작은 작업 여러 개가 GPU 한 장을 나눠 쓰는 방법입니다. 핵심 차이는 <b>얼마나 확실하게 분리되느냐</b>입니다.</p>
-  <div class="tbl"><table>
-    <thead><tr><th>방식</th><th>한 줄 설명</th><th>격리</th><th>지원</th><th>어울리는 곳</th></tr></thead>
-    <tbody>
-      <tr><td>MIG</td><td>GPU를 하드웨어에서 최대 7개로 잘라 독립 GPU처럼 사용</td><td>강함 (메모리·장애 분리)</td><td>A100부터, 최대 7개</td><td>여러 사용자·서비스에 일부씩 배정</td></tr>
-      <tr><td>MPS</td><td>여러 프로그램이 GPU 한 장을 동시에 함께 사용</td><td>약함 (메모리 분리 없음)</td><td>Volta부터 본격 지원</td><td>작은 추론 작업 여러 개</td></tr>
-      <tr><td><button class="t" data-t="timeslice">타임 슬라이싱</button></td><td>시간을 나눠 번갈아 사용</td><td>시간만 분리</td><td>드라이버·쿠버네티스 설정</td><td>개발·테스트 환경</td></tr>
-    </tbody>
-  </table></div>
-  <div class="prose">
-    <ul>
-      <li>예를 들어 A100 40GB의 <code>1g.5gb</code> MIG는 SM 14개와 메모리 5GB짜리 작은 GPU처럼 동작합니다.</li>
-      <li>쿠버네티스에서는 <button class="t" data-t="dra">DRA</button>로 이런 조각을 배정합니다. DRA는 1.34에서 정식 기능이 됐습니다. MIG와 MPS 설정은 14회차에서 다룹니다.</li>
-    </ul>
-  </div>
+  <h3>2. SM 안에 새 저장 공간이 생겼습니다</h3>
+  <div class="prose"><ul>
+    <li>데이터센터용 Blackwell부터 SM마다 Tensor Memory, 줄여서 <button class="t" data-t="tmem">TMEM</button>이라는 256KB 공간이 생겼습니다.</li>
+    <li>Tensor Core의 계산 결과를 레지스터 대신 여기에 쌓습니다. 3.10에서 다시 봅니다.</li>
+    <li>게이밍용 Blackwell인 RTX 5090에는 TMEM이 없습니다. 같은 세대라도 데이터센터용과 게이밍용 SM이 갈라지고 있습니다.</li>
+  </ul></div>
+  <h3>3. SM 단위로 나눠 쓰는 방법이 늘었습니다</h3>
+  <div class="prose"><ul>
+    <li><button class="t" data-t="greenctx">Green Context</button>는 프로그램마다 쓸 SM 수를 정해 주는 기능입니다. CUDA 12.4에 들어왔고, 2026년 5월 cuda.core 1.0부터 Python에서도 쓸 수 있습니다.</li>
+    <li>MIG보다 가볍게 SM을 나누지만, 메모리는 나누지 않습니다.</li>
+    <li>AMD도 칩을 여러 조각으로 만듭니다. MI355X는 조각 8개에 CU를 32개씩, 모두 256개를 켭니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>SM은 더 많아지고, 하나하나는 Tensor Core 중심으로 바뀌고 있습니다.</b> 그만큼 SM을 다 채우고 나눠 쓰는 일이 더 어려워집니다.</div>
 </section>
 
 <!-- ============ PART 2 : CUDA Core ============ -->
@@ -487,24 +459,24 @@
 </section>
 
 <section class="ch" id="s2-10">
-  <div class="ch-head"><span class="ch-num">2.10</span><h2>실무 관점</h2></div>
-  <h3>1. 스펙 볼 때: CUDA Core 개수의 함정</h3>
-  <div class="tbl"><table>
-    <thead><tr><th>제품</th><th>세대</th><th>CUDA Core</th><th>FP32 TFLOPS</th></tr></thead>
-    <tbody>
-      <tr><td>V100 SXM2</td><td>Volta, 2017</td><td class="num">5,120</td><td class="num">15.7</td></tr>
-      <tr><td>A100 SXM</td><td>Ampere, 2020</td><td class="num">6,912</td><td class="num">19.5</td></tr>
-      <tr><td>H100 SXM</td><td>Hopper, 2022</td><td class="num">16,896</td><td class="num">약 67</td></tr>
-      <tr><td>RTX 4090</td><td>Ada, 2022</td><td class="num">16,384</td><td class="num">82.6</td></tr>
-      <tr><td>RTX 5090</td><td>Blackwell, 2025</td><td class="num">21,760</td><td class="num">104.8</td></tr>
-    </tbody>
-  </table></div>
-  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>AI용 GPU를 비교할 때 CUDA Core 개수는 기준이 아닙니다.</b> RTX 4090은 FP32가 A100보다 네 배 넘게 높지만, AI 학습에서는 Tensor Core 성능과 메모리 때문에 A100이 앞서는 경우가 많습니다.</div>
-  <h3>2. 모니터링: FP32 Active</h3>
+  <div class="ch-head"><span class="ch-num">2.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. AI GPU에서 FP32와 FP64의 비중이 줄고 있습니다</h3>
   <div class="prose"><ul>
-    <li>DCGM의 FP32 Active는 CUDA Core가 FP32 계산을 한 비율입니다.</li>
-    <li>AI 학습인데 FP32 Active만 높고 Tensor Active가 낮다면, Tensor Core를 제대로 못 쓰고 있다는 신호입니다.</li>
+    <li>칩 면적이 낮은 정밀도의 Tensor Core 쪽으로 옮겨 가고 있습니다.</li>
+    <li>Rubin은 NVFP4 추론 성능이 약 50 PFLOPS인데, Tensor Core를 쓰지 않는 FP32는 약 130 TFLOPS로 알려져 있습니다.</li>
+    <li>Blackwell Ultra, 즉 B300은 FP64 성능을 크게 줄였습니다. B200의 약 30분의 1 수준이라는 분석이 있습니다.</li>
   </ul></div>
+  <h3>2. FP64를 Tensor Core로 흉내 냅니다</h3>
+  <div class="prose"><ul>
+    <li>낮은 정밀도의 Tensor Core 계산을 여러 번 해서 FP64 결과를 만드는 방법, 즉 에뮬레이션 연구가 활발합니다. 오자키 방식이 대표적입니다.</li>
+    <li>2025년 11월 논문은 GB200에서 FP64 정확도를 지키면서, 일반 FP64 행렬 곱셈보다 최대 2.3배 빨랐다고 보고했습니다.</li>
+  </ul></div>
+  <h3>3. CUDA Core가 새 병목이 되기도 합니다</h3>
+  <div class="prose"><ul>
+    <li>softmax, 정규화 같은 일은 여전히 CUDA Core가 합니다. Tensor Core가 빨라질수록 이 부분이 상대적으로 느려집니다.</li>
+    <li>FlashAttention-4는 지수 함수 일부를 CUDA Core의 곱셈과 덧셈으로 계산해서, 이 병목을 줄였습니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>CUDA Core 수는 줄지 않았지만, AI GPU에서 주인공 자리는 Tensor Core로 넘어갔습니다.</b> 남은 과제는 CUDA Core가 Tensor Core의 속도를 따라가게 하는 것입니다.</div>
 </section>
 
 <!-- ============ PART 3 : Tensor Core ============ -->
@@ -544,7 +516,7 @@
     그래서 2017년 V100(Volta)에서 처음 등장한 것이 바로 <b>Tensor Core</b>입니다.
     <ul>
       <li>V100에는 SM 80개에 8개씩, 모두 640개가 들어갔습니다.</li>
-      <li>이후 세대마다 다룰 수 있는 숫자 형식이 늘었습니다. 3.10에서 정리합니다.</li>
+      <li>이후 세대마다 다룰 수 있는 숫자 형식이 늘었습니다. 최근 세대의 변화는 3.10에서 봅니다.</li>
     </ul>
   </div>
 </section>
@@ -707,41 +679,29 @@
 </section>
 
 <section class="ch" id="s3-10">
-  <div class="ch-head"><span class="ch-num">3.10</span><h2>실무 관점</h2></div>
-  <h3>1. 스펙 시트 읽는 법</h3>
-  <p class="prose">같은 H100 SXM이라도 형식에 따라 성능 숫자가 크게 다릅니다.</p>
-  <div class="tbl"><table>
-    <thead><tr><th>형식</th><th>담당</th><th>TFLOPS</th><th>희소성 포함 표기</th></tr></thead>
-    <tbody>
-      <tr><td>FP32</td><td>CUDA Core</td><td class="num">약 67</td><td class="num">-</td></tr>
-      <tr><td>TF32</td><td>Tensor Core</td><td class="num">약 495</td><td class="num">약 989</td></tr>
-      <tr><td>BF16 / FP16</td><td>Tensor Core</td><td class="num">약 989</td><td class="num">약 1,979</td></tr>
-      <tr><td>FP8</td><td>Tensor Core</td><td class="num">약 1,979</td><td class="num">약 3,958</td></tr>
-    </tbody>
-  </table></div>
-  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>성능 숫자는 어느 정밀도 기준인지, 희소성이 포함됐는지를 꼭 함께 봅니다.</b> 둘을 놓치면 같은 칩도 여덟 배 가까이 다르게 보입니다.</div>
-  <details>
-    <summary>Q. 왜 스펙 시트는 희소성이 포함된 숫자를 앞세우나요?</summary>
-    <div class="prose"><p>낼 수 있는 최대값이라 더 빨라 보이기 때문입니다. 희소성 가속은 숫자 네 개 중 두 개가 0인 행렬에서만 되고, 대부분의 모델은 이 조건을 맞추지 않습니다. 비교할 때는 희소성을 뺀 숫자를 봅니다.</p></div>
-  </details>
-
-  <h3>2. 세대별 레퍼런스</h3>
+  <div class="ch-head"><span class="ch-num">3.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. 4비트가 주력이 되고 있습니다</h3>
+  <div class="prose"><ul>
+    <li>Blackwell은 NVFP4라는 4비트 형식을 Tensor Core에서 바로 계산합니다. 숫자 16개마다 배율을 따로 둬서 정확도를 지킵니다.</li>
+    <li>Rubin은 NVFP4 추론 성능을 약 50 PFLOPS로 발표했습니다. H100의 FP8 약 1,979 TFLOPS보다 25배쯤 큰 숫자입니다. 다만 정밀도가 달라서 그대로 비교할 수는 없습니다.</li>
+    <li>형식 이야기는 4회차에서 자세히 다룹니다.</li>
+  </ul></div>
+  <h3>2. Tensor Core를 부르는 방식이 바뀌었습니다</h3>
+  <div class="prose"><ul>
+    <li>H100까지는 warp가 Tensor Core에 명령을 내고, 결과를 레지스터에 받았습니다.</li>
+    <li>데이터센터용 Blackwell에서는 스레드 하나가 명령을 내고, 결과는 1.10에서 본 <button class="t" data-t="tmem">TMEM</button>에 쌓입니다.</li>
+    <li>결과를 레지스터에 두지 않아서 레지스터 부담이 줄었습니다. 자세한 내용은 3회차 PART 5에서 봅니다.</li>
+  </ul></div>
+  <h3>3. 최근 세대에 새로 생긴 것</h3>
   <div class="tbl"><table>
     <thead><tr><th>세대</th><th>대표 제품</th><th>출시</th><th>Tensor Core에 새로 생긴 것</th></tr></thead>
     <tbody>
-      <tr><td>Volta</td><td>V100</td><td>2017</td><td>Tensor Core 첫 등장, FP16</td></tr>
-      <tr><td>Turing</td><td>T4, RTX 20</td><td>2018</td><td>INT8·INT4 추론</td></tr>
-      <tr><td>Ampere</td><td>A100</td><td>2020</td><td>TF32·BF16, 구조적 희소성</td></tr>
-      <tr><td>Hopper</td><td>H100</td><td>2022</td><td>FP8, Transformer Engine</td></tr>
-      <tr><td>Blackwell</td><td>B200</td><td>2024</td><td>FP4·FP6, 마이크로 스케일링</td></tr>
+      <tr><td>Hopper</td><td>H100</td><td>2022</td><td>FP8, Transformer Engine, warpgroup 단위 명령</td></tr>
+      <tr><td>Blackwell</td><td>B200</td><td>2024</td><td>FP4·FP6, 마이크로 스케일링, TMEM, 스레드 하나가 명령</td></tr>
+      <tr><td>Rubin</td><td>Rubin</td><td>2026</td><td>NVFP4 중심 설계, GPU당 Tensor Core 896개</td></tr>
     </tbody>
   </table></div>
-
-  <h3>3. 모니터링: Tensor Active</h3>
-  <div class="prose"><ul>
-    <li>1.10의 Tensor Active가 Tensor Core 가동률입니다.</li>
-    <li>AI 학습인데 이 값이 낮다면, FP32로만 돌고 있거나 데이터 공급이 막혀 있을 가능성이 큽니다. 먼저 혼합 정밀도 옵션이 켜져 있는지 확인합니다.</li>
-  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>Tensor Core 성능은 세대마다 숫자 형식을 줄이면서 커졌습니다.</b> 새 GPU의 성능 숫자를 볼 때는 어느 형식 기준인지부터 확인합니다.</div>
 </section>
 
 <!-- ============ PART 4 : Occupancy ============ -->
@@ -916,18 +876,24 @@
 </section>
 
 <section class="ch" id="s4-10">
-  <div class="ch-head"><span class="ch-num">4.10</span><h2>실무 관점</h2></div>
-  <h3>1. 목표치</h3>
+  <div class="ch-head"><span class="ch-num">4.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. 낮은 점유율로 빠르게 도는 커널이 표준이 됐습니다</h3>
   <div class="prose"><ul>
-    <li>정답 숫자는 없습니다. 계산 위주 작업은 25% 안팎에서도 충분히 빠를 수 있습니다.</li>
-    <li>데이터를 많이 읽고 쓰는 작업은 대체로 높을수록 유리합니다.</li>
+    <li>최신 행렬 곱셈과 Attention 커널은 SM 하나에 블록 하나만 올리는 경우가 많습니다. 점유율은 낮습니다.</li>
+    <li>대신 warp마다 역할을 나눠 기다림을 숨깁니다. 이걸 <button class="t" data-t="warpspec">Warp Specialization</button>이라고 하고, 3회차 PART 5에서 봅니다.</li>
+    <li>4.8에서 본 ILP와 함께, "후보 warp를 많이 두는 것" 말고도 기다림을 숨기는 방법이 주류가 됐습니다.</li>
   </ul></div>
-  <h3>2. 확인 방법</h3>
+  <h3>2. 레지스터가 덜 막습니다</h3>
   <div class="prose"><ul>
-    <li><b>개발 단계:</b> Nsight Compute로 커널별 이론값, 실제값, 막힌 한도를 봅니다.</li>
-    <li><b>운영 단계:</b> DCGM의 SM Occupancy를 Grafana로 봅니다.</li>
+    <li>데이터센터용 Blackwell은 Tensor Core 결과를 1.10에서 본 TMEM에 쌓습니다.</li>
+    <li>4.4에서 본 레지스터 한도가 예전만큼 점유율을 막지 않습니다.</li>
   </ul></div>
-  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>GPU-Util, SM Active, SM Occupancy, Tensor Active 순서로 봅니다.</b> 일을 하는지, 넓게 쓰는지, 깊게 쓰는지, Tensor Core를 쓰는지를 차례로 확인하는 순서입니다.</div>
+  <h3>3. SM을 나눠 쓰는 쪽으로 관심이 옮겨 갑니다</h3>
+  <div class="prose"><ul>
+    <li>커널 하나가 SM을 얼마나 채우는지보다, 여러 작업이 SM을 어떻게 나눠 쓰는지가 중요해지고 있습니다.</li>
+    <li>1.10에서 본 Green Context처럼 SM 수를 작업마다 정해 주는 방식이 추론 서버에서 쓰이기 시작했습니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>점유율은 이제 "높일수록 좋은 값"이 아니라 "느린 원인을 찾는 단서"입니다.</b></div>
 </section>
 
 <section class="ch" id="refs">
@@ -938,6 +904,10 @@
     <li><a href="https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/" target="_blank" rel="noopener">CUDA C++ Best Practices Guide (Occupancy)</a></li>
     <li><a href="https://docs.nvidia.com/nsight-compute/" target="_blank" rel="noopener">Nsight Compute Documentation</a></li>
     <li><a href="https://docs.nvidia.com/datacenter/dcgm/latest/" target="_blank" rel="noopener">NVIDIA DCGM Documentation</a></li>
+    <li><a href="https://developer.nvidia.com/blog/inside-nvidia-rubin-gpu-architecture-powering-the-era-of-agentic-ai/" target="_blank" rel="noopener">Inside NVIDIA Rubin GPU Architecture (2026)</a></li>
+    <li><a href="https://tridao.me/blog/2026/flash4/" target="_blank" rel="noopener">FlashAttention-4 (2026)</a></li>
+    <li><a href="https://nvidia.github.io/cuda-python/cuda-core/1.0.1/release/1.0.0-notes.html" target="_blank" rel="noopener">cuda.core 1.0.0 Release Notes (Green Context)</a></li>
+    <li><a href="https://arxiv.org/html/2511.13778v1" target="_blank" rel="noopener">FP64 emulation on Blackwell (arXiv 2511.13778)</a></li>
   </ul></div>
 </section>
 

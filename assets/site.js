@@ -36,7 +36,7 @@
   function termCard(key, g, k, withId) {
     const find = !glossaryPage && inPage(key) ? `<button class="linkish" type="button" data-find="${key}">본문에서 찾기</button>` : "";
     return `<article${withId ? ` id="${key}"` : ""} data-key="${key}"><div class="c">${esc(g.c)}</div><h3>${mark(g.n, k.trim())}</h3><p>${mark(g.d, k.trim())}</p>
-      <div class="s"><span class="muted">나온 회차:</span> ${(g.s || []).map(sessionLink).join(", ")}${find ? " · " + find : ""}</div></article>`;
+      <div class="s"><span class="muted">나온 회차:</span> ${(g.s || []).map(sessionLink).join(", ") || "아직 없음"}${find ? " · " + find : ""}</div></article>`;
   }
 
   /* 테마 */

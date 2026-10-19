@@ -1,4 +1,4 @@
-// 2회차 그림: SM 배치, 비트 막대, wave, 지표 시나리오, 점유율 계산기
+// 2회차 그림: SM 배치, 비트 막대, wave, 점유율 계산기
 const ns='http://www.w3.org/2000/svg';
 function el(tag,attrs,parent,text){const n=document.createElementNS(ns,tag);for(const k in attrs)n.setAttribute(k,attrs[k]);if(text!=null)n.textContent=text;if(parent)parent.appendChild(n);return n;}
 /* 1.3 die */
@@ -43,30 +43,6 @@ function el(tag,attrs,parent,text){const n=document.createElementNS(ns,tag);for(
     el('text',{x:4,y:w*rh+17,'font-size':12,fill:'var(--muted)'},svg,`${w+1}차`);
     for(let s=0;s<m;s++) el('rect',{x:lx+s*cw,y:w*rh+5,width:cw-1,height:rh-10,rx:1,fill:s<used?'var(--accent)':'var(--idle)'},svg);
   });
-})();
-
-/* 1.10 metrics */
-(function(){
-  const SC=[
-   {n:'작은 작업이 계속 실행',a:1,occ:0.5,util:100,ten:0,d:'작은 작업 하나가 쉬지 않고 돌고 있습니다. 항상 뭔가 돌고 있으니 GPU-Util은 100%입니다. 하지만 132개 SM 중 1개만 일하고, 나머지 지표는 1%도 안 됩니다.'},
-   {n:'큰 행렬 곱셈 (학습)',a:132,occ:0.25,util:100,ten:72,d:'모든 SM이 일하고 Tensor Core도 바쁩니다. SM 안은 25% 정도만 차 있지만 성능은 좋습니다. 점유율이 낮아도 빠른 사례입니다.'},
-   {n:'단순 반복 계산',a:132,occ:0.85,util:100,ten:0,d:'모든 SM이 꽉 차 있지만 Tensor Core는 쓰지 않습니다. 이런 작업은 메모리 속도가 성능을 정합니다.'},
-   {n:'요청 사이 공백이 많은 추론',a:96,occ:0.4,util:55,ten:20,d:'작업 사이사이에 대기 시간이 끼어 있어서 GPU-Util부터 낮습니다. 작업이 도는 동안에도 SM을 다 채우지 못합니다. 요청을 묶어서 처리하면 나아집니다.'}
-  ];
-  let cur=0; const seg=document.getElementById('m-scen'), svg=document.getElementById('mSvg'), bars=document.getElementById('m-bars'), desc=document.getElementById('m-desc');
-  seg.innerHTML=SC.map((s,i)=>`<button class="btn" data-i="${i}" type="button">${s.n}</button>`).join('');
-  seg.onclick=e=>{const b=e.target.closest('[data-i]');if(b){cur=+b.dataset.i;run();}};
-  function run(){
-    [...seg.children].forEach((b,i)=>b.classList.toggle('on',i===cur));
-    const s=SC[cur]; svg.innerHTML='';
-    for(let i=0;i<132;i++){const x=6+(i%12)*32, y=6+Math.floor(i/12)*16; const on=i<s.a;
-      el('rect',{x,y,width:29,height:13,rx:2,fill:on?'var(--accent)':'var(--idle)',opacity:on?(0.35+0.65*s.occ):1},svg);}
-    const smA=s.a/132*(s.util/100), smO=s.a/132*s.occ*(s.util/100);
-    const M=[['GPU-Util',s.util,'var(--muted)'],['SM Active',smA*100,'var(--accent)'],['SM Occupancy',smO*100,'var(--accent)'],['Tensor Active',s.ten*(s.util/100),'var(--tensor)']];
-    bars.innerHTML=M.map(([n,v,c])=>`<div class="bar"><span>${n}</span><div class="track"><div class="fill" style="width:${Math.max(1,v)}%;background:${c}"></div></div><span class="v">${v<1&&v>0?v.toFixed(1):Math.round(v)}%</span></div>`).join('');
-    desc.textContent=s.d;
-  }
-  run();
 })();
 
 /* 4.4 occupancy calculator */

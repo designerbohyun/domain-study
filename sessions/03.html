@@ -1,0 +1,937 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>3회차 · Kernel, Thread, Block, Grid, Warp · 도메인 스터디</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.0.6/css/pico.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="../assets/site.css">
+<script>try{var t=localStorage.getItem("theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+</head>
+<body data-root="..">
+<header class="site"><nav class="container">
+  <ul><li><a class="brand" href="../">도메인 스터디</a></li></ul>
+  <ul><li><a href="../">스터디 목차</a></li><li><a href="../glossary.html">용어 사전</a></li></ul>
+</nav></header>
+
+<div class="container doc">
+<aside class="toc"><details open><summary>이 회차 목차</summary><ol id="toc"></ol></details></aside>
+<main>
+<header class="doc-head">
+  <div class="crumb"><a href="../">스터디 목차</a> / GPU 기본 구조 / 3회차</div>
+  <h1>3회차 · Kernel, Thread, Block, Grid, Warp</h1>
+  <p>지난 2회차에서는 SM 안을 들여다봤습니다. 블록이 SM에 배정되고, Warp Scheduler가 warp를 골라 실행한다는 것까지 봤습니다. 오늘은 그 일감이 어떻게 만들어지는지, 프로그래머 쪽에서 보이는 단위를 차례로 보겠습니다.</p>
+  <ul>
+    <li>커널을 한 번 실행하면 그리드가 하나 만들어집니다.</li>
+    <li>그리드는 여러 블록으로, 블록은 여러 스레드로 이루어집니다.</li>
+    <li>하드웨어는 스레드를 32개씩 묶은 warp 단위로 실제 실행합니다.</li>
+  </ul>
+  <div class="tbl wide"><table>
+    <thead><tr><th>단위</th><th>누가 정하나</th><th>실행되는 곳</th><th>내장 변수</th><th>한계 (H100 기준)</th></tr></thead>
+    <tbody>
+      <tr><td>Grid</td><td>프로그래머</td><td>GPU 전체</td><td><code>gridDim</code></td><td>x축 최대 2³¹−1 블록</td></tr>
+      <tr><td>Block</td><td>프로그래머</td><td>SM 1개</td><td><code>blockIdx</code>, <code>blockDim</code></td><td>블록당 최대 1,024 스레드</td></tr>
+      <tr><td>Thread</td><td>프로그래머</td><td>계산 유닛 한 칸</td><td><code>threadIdx</code></td><td>스레드당 레지스터 최대 255개</td></tr>
+      <tr><td>Warp</td><td>하드웨어</td><td>Warp Scheduler</td><td><code>warpSize</code></td><td>항상 32 스레드</td></tr>
+    </tbody>
+  </table></div>
+  <p>진행 순서는 1, 2회차와 같습니다. 기준 제품도 같은 NVIDIA <button class="t" data-t="h100">H100</button> SXM입니다.</p>
+  <div class="flow" aria-label="주제별 진행 순서">
+    <span><b>1</b>정의</span><span><b>2</b>등장 배경</span><span><b>3</b>구조</span><span><b>4</b>작동 방식</span><span><b>5</b>이점</span><span><b>6</b>부재 시 문제</span><span><b>7</b>단점</span><span><b>8</b>대안 기술</span><span><b>9</b>대안과의 비교</span><span><b>10</b>최신 트렌드</span>
+  </div>
+</header>
+
+<!-- ============ PART 1 : Kernel ============ -->
+<div class="part" id="p1">
+  <div class="pk">PART 1</div>
+  <h2>Kernel (커널)</h2>
+  <p>가장 바깥 단위인 커널부터 보겠습니다.</p>
+</div>
+
+<section class="ch" id="s1-1">
+  <div class="ch-head"><span class="ch-num">1.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="kernel">커널</button>은 <b>CPU가 실행을 지시하고, GPU의 수많은 스레드가 함께 실행하는 함수</b>입니다.</p>
+  <div class="prose"><ul>
+    <li>CUDA C++에서는 함수 앞에 <code>__global__</code>을 붙여 커널로 만듭니다.</li>
+    <li>코드에는 스레드 하나가 할 일만 적습니다. 실행할 때 수천에서 수백만 개 스레드가 같은 코드를 각자 다른 데이터에 실행합니다.</li>
+    <li>이런 방식을 SPMD, 즉 프로그램 하나에 데이터 여러 개라고 부릅니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-2">
+  <div class="ch-head"><span class="ch-num">1.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li>CUDA 이전에는 GPU에 일을 시키려면 그래픽 API를 거쳐야 했습니다.</li>
+    <li>계산을 셰이더, 즉 픽셀마다 실행되는 작은 그래픽 프로그램으로 위장했습니다. 데이터는 텍스처 이미지로 넣고, 결과는 화면 그림으로 받았습니다.</li>
+    <li>"점 하나마다 같은 프로그램을 실행한다"는 발상은 좋았지만, 그래픽 밖에서 쓰기는 불편했습니다.</li>
+  </ul></div>
+  <div class="callout idea">
+    <span class="say">"그럼 원소마다 실행되는 함수를, 그래픽과 상관없이 C 코드로 쓰게 하자!"</span>
+    그래서 2006년 <button class="t" data-t="cuda">CUDA</button> 발표와 함께 등장한 것이 바로 <b>커널</b>입니다.
+    <ul>
+      <li>2007년 첫 CUDA 툴킷이 나오면서, GPU에 보내는 작업 단위가 함수 형태로 정해졌습니다.</li>
+      <li>1회차에서 본 배열 더하기 코드가 바로 커널입니다.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="ch" id="s1-3">
+  <div class="ch-head"><span class="ch-num">1.3</span><h2>구조</h2></div>
+  <h3>1. 함수 지정자</h3>
+  <p class="prose">함수 앞에 붙이는 표시로, 누가 부르고 어디서 실행되는지를 정합니다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>지정자</th><th>누가 부르나</th><th>어디서 실행되나</th></tr></thead>
+    <tbody>
+      <tr><td><code>__global__</code></td><td>CPU</td><td>GPU (이것이 커널)</td></tr>
+      <tr><td><code>__device__</code></td><td>GPU 안의 다른 함수</td><td>GPU</td></tr>
+      <tr><td><code>__host__</code></td><td>CPU</td><td>CPU (아무것도 안 붙인 함수와 같음)</td></tr>
+    </tbody>
+  </table></div>
+  <h3>2. 실행 구성</h3>
+  <p class="prose">커널을 부를 때는 꺾쇠 세 개 안에 실행 구성을 적습니다.</p>
+  <pre><code>kernel&lt;&lt;&lt;그리드 크기, 블록 크기, 동적 Shared Memory, 스트림&gt;&gt;&gt;(인자);</code></pre>
+  <div class="prose"><ul>
+    <li>앞의 두 값, 즉 블록을 몇 개 만들지와 블록마다 스레드를 몇 개 둘지는 꼭 적습니다.</li>
+    <li>뒤의 두 값은 생략할 수 있습니다.</li>
+  </ul></div>
+  <h3>3. 실행 경로</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>단계</th><th>하는 일</th></tr></thead>
+    <tbody>
+      <tr><td>CPU</td><td>커널 실행을 지시</td></tr>
+      <tr><td><button class="t" data-t="stream">스트림</button></td><td>지시를 순서대로 쌓아 두는 대기열</td></tr>
+      <tr><td><button class="t" data-t="gigathread">GigaThread Engine</button></td><td>GPU 전체에서 블록을 SM에 나눠 주는 장치</td></tr>
+      <tr><td>SM</td><td>배정받은 블록을 실행</td></tr>
+    </tbody>
+  </table></div>
+  <details>
+    <summary>Q. 기초 · 스트림은 무엇인가요?</summary>
+    <div class="prose"><p>GPU에 보낼 작업을 쌓아 두는 대기열입니다. 같은 스트림에 넣은 작업은 순서대로 실행되고, 다른 스트림끼리는 동시에 실행될 수 있습니다. 데이터 복사와 계산을 다른 스트림에 넣어 겹치게 하는 데 많이 씁니다.</p></div>
+  </details>
+</section>
+
+<section class="ch" id="s1-4">
+  <div class="ch-head"><span class="ch-num">1.4</span><h2>작동 방식</h2></div>
+  <pre><code>__global__ void scale(float* x, float a, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i &lt; n) x[i] = a * x[i];
+}
+scale&lt;&lt;&lt;(n + 255) / 256, 256&gt;&gt;&gt;(d_x, 2.0f, n);  // CPU는 기다리지 않고 바로 다음 줄로
+cudaDeviceSynchronize();                         // GPU 작업이 끝날 때까지 대기</code></pre>
+  <div class="prose"><ol>
+    <li><b>실행 지시:</b> CPU가 커널 실행을 지시합니다. CPU는 끝나기를 기다리지 않고 바로 다음 줄로 넘어갑니다. 이걸 비동기 실행이라고 합니다.</li>
+    <li><b>대기열:</b> 지시는 스트림에 쌓입니다. 같은 스트림의 커널은 순서대로, 다른 스트림의 커널은 동시에 실행될 수 있습니다.</li>
+    <li><b>블록 배정:</b> GigaThread Engine이 블록을 빈 SM에 나눠 줍니다. 2회차 1.4에서 본 블록 배정이 바로 이 부분입니다.</li>
+    <li><b>결과:</b> 커널이 끝나면 결과는 VRAM에 남습니다. CPU가 결과를 쓰려면 <code>cudaDeviceSynchronize()</code>로 기다리거나 복사 명령을 내립니다.</li>
+  </ol></div>
+  <details>
+    <summary>Q. 왜 커널 실행을 비동기로 하나요?</summary>
+    <div class="prose"><p>CPU가 커널마다 끝나기를 기다리면, 그동안 CPU가 놀고 다음 지시도 늦어집니다. 다음 지시가 늦으면 GPU도 놉니다. 지시를 미리 쌓아 두면 GPU는 쉬지 않고 이어서 실행하고, CPU는 그동안 다음 데이터를 준비합니다.</p></div>
+  </details>
+</section>
+
+<section class="ch" id="s1-5">
+  <div class="ch-head"><span class="ch-num">1.5</span><h2>이점</h2></div>
+  <div class="prose"><ul>
+    <li><b>스레드 하나 관점으로 씁니다:</b> 수백만 개 병렬 실행을 함수 하나로 표현합니다.</li>
+    <li><b>GPU가 바뀌어도 그대로 돕니다:</b> 같은 커널이 SM 24개인 RTX 4060에서도, 132개인 H100에서도 수정 없이 돕니다.</li>
+    <li><b>CPU와 겹쳐 일합니다:</b> 비동기 실행이라 CPU는 그동안 다음 일을 준비합니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-6">
+  <div class="ch-head"><span class="ch-num">1.6</span><h2>부재 시 문제</h2></div>
+  <p class="prose">커널이라는 단위가 없다고 가정해 보면, 이런 문제가 생깁니다.</p>
+  <div class="prose"><ul>
+    <li>CPU가 원소마다 반복문을 돌거나, CUDA 이전처럼 그래픽 API로 우회해야 합니다.</li>
+    <li>GPU에 무엇을 시켰고 언제 끝났는지 다룰 단위가 없어, 작업 순서를 관리하기 어렵습니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-7">
+  <div class="ch-head"><span class="ch-num">1.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>실행할 때마다 비용이 듭니다:</b> 커널 한 번을 띄우는 데 수 마이크로초가 걸립니다. 작은 커널을 수천 번 실행하면 GPU보다 CPU의 지시 속도가 병목이 됩니다. LLM이 토큰을 하나씩 만드는 단계가 대표적입니다.</li>
+    <li><b>커널 사이 데이터는 VRAM을 거칩니다:</b> 연산 A가 결과를 VRAM에 쓰고, 연산 B가 다시 읽습니다. 메모리 대역폭을 낭비합니다.</li>
+    <li><b>디버깅이 어렵습니다:</b> 수천 개 스레드가 동시에 돌아서, 어디서 틀렸는지 찾기 어렵습니다.</li>
+  </ul></div>
+  <details>
+    <summary>Q. GPU-Util은 높은데 왜 느릴 수 있나요?</summary>
+    <div class="prose"><p>2회차 4.9에서 본 것처럼 <button class="t" data-t="gpuutil">GPU-Util</button>은 커널이 하나라도 돈 시간의 비율입니다. 작은 커널이 연달아 돌면 값은 높게 나오지만, 커널마다 GPU 일부만 쓰거나 커널 사이에 빈 구간이 생깁니다. Nsight Systems 타임라인으로 커널 사이의 빈 구간을 확인합니다.</p></div>
+  </details>
+</section>
+
+<section class="ch" id="s1-8">
+  <div class="ch-head"><span class="ch-num">1.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. <button class="t" data-t="fusion">커널 퓨전</button></h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 여러 연산을 커널 하나로 합칩니다. 2회차 2.8에서 본 기술로, torch.compile, Triton, FlashAttention이 대표 예입니다.</li>
+    <li><b>해결하는 단점:</b> 실행 횟수와 VRAM 왕복을 함께 줄입니다.</li>
+  </ul></div>
+  <h3>2. <button class="t" data-t="cudagraphs">CUDA Graphs</button></h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 커널 실행 순서를 한 번 녹화해 두고, 다음부터는 통째로 한 번에 재생합니다.</li>
+    <li><b>해결하는 단점:</b> 실행 비용을 커널마다 내지 않아도 됩니다.</li>
+  </ul></div>
+  <h3>3. <button class="t" data-t="persistent">Persistent Kernel</button></h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 커널을 한 번만 띄워 두고, 그 안에서 다음 일을 계속 가져와 처리합니다. 모델 전체를 커널 하나로 돌리는 Megakernel도 여기에 속합니다.</li>
+    <li><b>해결하는 단점:</b> 실행 비용과 커널 사이 공백을 거의 없앱니다. 4.8에서 다시 봅니다.</li>
+  </ul></div>
+  <h3>4. 타일 단위 작성 도구</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> <button class="t" data-t="triton">Triton</button>, cuTile Python처럼 스레드 대신 데이터 조각, 즉 타일 단위로 커널을 씁니다.</li>
+    <li><b>해결하는 단점:</b> 커널을 짜고 디버깅하는 부담을 줄입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-9">
+  <div class="ch-head"><span class="ch-num">1.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>방식</th><th>실행 횟수</th><th>VRAM 왕복</th><th>구현 난이도</th><th>대표 사례</th></tr></thead>
+    <tbody>
+      <tr><td>연산마다 커널</td><td>많음</td><td>많음</td><td>쉬움</td><td>PyTorch eager 모드</td></tr>
+      <tr><td>커널 퓨전</td><td>적음</td><td>적음</td><td>중간 (컴파일러가 자동화)</td><td>torch.compile, FlashAttention</td></tr>
+      <tr><td>CUDA Graphs</td><td>재생 1회</td><td>변화 없음</td><td>쉬움</td><td>vLLM 토큰 생성 단계</td></tr>
+      <tr><td>Megakernel</td><td>1회</td><td>최소</td><td>매우 어려움</td><td>저지연 LLM 추론 연구</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="ch" id="s1-10">
+  <div class="ch-head"><span class="ch-num">1.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. 커널을 타일 단위로 씁니다: CUDA Tile</h3>
+  <div class="prose"><ul>
+    <li>2025년 12월 CUDA 13.1에서 <button class="t" data-t="cudatile">CUDA Tile</button>이 나왔습니다. 스레드가 아니라 데이터 조각, 즉 타일 단위로 커널을 쓰는 NVIDIA 공식 방식입니다.</li>
+    <li>Python용 cuTile Python이 먼저 나왔고, 2026년 CUDA 13.3에서 C++로도 쓸 수 있게 됐습니다.</li>
+    <li>처음에는 Blackwell만 지원했지만, 2026년에 Ampere, Ada, Hopper까지 넓어졌습니다.</li>
+    <li>Tensor Core와 TMA를 쓰는 일은 컴파일러가 맡습니다.</li>
+  </ul></div>
+  <h3>2. 모델 전체를 커널 하나로: Megakernel</h3>
+  <div class="prose"><ul>
+    <li>Mirage Persistent Kernel, 줄여서 MPK는 모델 전체를 커널 하나로 바꿔 주는 컴파일러입니다. 2026년 OSDI 학회에 실렸습니다. 이런 방식을 <button class="t" data-t="megakernel">Megakernel</button>이라고 부릅니다.</li>
+    <li>연산마다 커널을 띄우는 방식보다 추론 지연을 최대 1.7배 줄였다고 보고했습니다. A100, H100, B200에서 평가했습니다.</li>
+    <li>효과는 한 번에 들어오는 요청이 적은 토큰 생성 단계에서 가장 큽니다.</li>
+  </ul></div>
+  <h3>3. AI가 커널을 씁니다</h3>
+  <div class="prose"><ul>
+    <li>LLM으로 CUDA와 Triton 커널을 자동 생성하고 최적화하는 시도가 늘고 있습니다. KernelBench 같은 평가 세트가 있습니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>커널을 누가, 얼마나 큰 단위로 쓰느냐가 바뀌고 있습니다.</b> 사람이 스레드 단위로 쓰던 커널을, 컴파일러와 AI가 더 큰 단위로 쓰는 쪽으로 옮겨 갑니다.</div>
+</section>
+
+<!-- ============ PART 2 : Thread ============ -->
+<div class="part" id="p2">
+  <div class="pk">PART 2</div>
+  <h2>Thread (스레드)</h2>
+  <p>여기까지가 커널이었습니다. 이제 커널을 실제로 실행하는 가장 작은 단위, 스레드로 넘어가겠습니다.</p>
+</div>
+
+<section class="ch" id="s2-1">
+  <div class="ch-head"><span class="ch-num">2.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="thread">스레드</button>는 <b>커널 코드를 실행하는 가장 작은 단위</b>입니다.</p>
+  <div class="prose"><ul>
+    <li>스레드마다 자기 번호, 즉 인덱스와 전용 레지스터를 가집니다.</li>
+    <li>보통 데이터 원소 하나에 스레드 하나를 맞춥니다.</li>
+    <li>스레드는 자기 번호를 보고 몇 번째 데이터를 처리할지 스스로 계산합니다.</li>
+  </ul></div>
+  <details>
+    <summary>Q. 스레드 수와 CUDA Core 수는 같은가요?</summary>
+    <div class="prose"><p>아닙니다. H100 SXM의 CUDA Core는 16,896개지만, 동시에 올라가는 스레드는 약 27만 개입니다. 스레드가 코어보다 훨씬 많아야, 메모리를 기다리는 스레드 대신 다른 스레드를 실행해 코어를 쉬지 않게 할 수 있습니다. 2회차에서 본 지연 은닉입니다.</p></div>
+  </details>
+</section>
+
+<section class="ch" id="s2-2">
+  <div class="ch-head"><span class="ch-num">2.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li>원소마다 같은 계산을 하는 일은, 원소마다 실행 주체를 하나씩 두면 가장 쉽게 표현됩니다.</li>
+    <li>그런데 CPU 스레드는 운영체제가 관리해서, 만들고 바꾸는 데 마이크로초 단위 시간이 걸립니다.</li>
+    <li>수만 개를 만들면 관리 비용이 계산보다 커집니다.</li>
+  </ul></div>
+  <div class="callout idea">
+    <span class="say">"그럼 하드웨어가 직접 관리하는 아주 가벼운 스레드를 수십만 개 두자!"</span>
+    그래서 2006년 G80과 CUDA에서 등장한 것이 바로 <b>GPU 스레드</b>입니다.
+    <ul>
+      <li>스레드마다 레지스터를 미리 나눠 줘서, 만들고 바꾸는 비용이 거의 없습니다.</li>
+      <li>G80은 SM 하나에 스레드 768개, 칩 전체로 1만 2천여 개를 동시에 올렸습니다. H100 SXM은 약 27만 개입니다.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="ch" id="s2-3">
+  <div class="ch-head"><span class="ch-num">2.3</span><h2>구조</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>구성</th><th>하는 일</th><th>한계 (H100)</th></tr></thead>
+    <tbody>
+      <tr><td><code>threadIdx</code></td><td>블록 안에서 내 위치 (x, y, z)</td><td>블록당 최대 1,024</td></tr>
+      <tr><td><button class="t" data-t="register">레지스터</button></td><td>스레드 전용, 가장 빠른 저장 공간</td><td>스레드당 최대 255개</td></tr>
+      <tr><td>로컬 메모리</td><td>레지스터가 모자랄 때 넘치는 공간</td><td>실제 위치는 VRAM</td></tr>
+      <tr><td>프로그램 카운터</td><td>다음에 실행할 명령의 위치</td><td>Volta부터 스레드마다 따로</td></tr>
+    </tbody>
+  </table></div>
+  <p class="prose">전체에서 몇 번째 스레드인지는 블록 번호, 블록 크기, 블록 안 번호로 계산합니다. 2.4에서 봅니다.</p>
+  <details>
+    <summary>Q. 기초 · 로컬 메모리는 이름이 "로컬"인데 왜 느린가요?</summary>
+    <div class="prose"><p>스레드 하나만 쓰는 공간이라 로컬이라고 부를 뿐, 실제 위치는 VRAM입니다. 그래서 레지스터보다 훨씬 느립니다. 2회차 4.7에서 본 <button class="t" data-t="spill">레지스터 넘침</button>이 바로 이 공간으로 넘어가는 것입니다.</p></div>
+  </details>
+</section>
+
+<section class="ch" id="s2-4">
+  <div class="ch-head"><span class="ch-num">2.4</span><h2>작동 방식</h2></div>
+  <h3>1. 내 번호 계산하기</h3>
+  <pre><code>int i = blockIdx.x * blockDim.x + threadIdx.x;  // 전체에서 몇 번째 스레드인지
+if (i &lt; n) out[i] = in[i] * 2;                   // 범위를 벗어나면 아무것도 안 함</code></pre>
+  <div class="prose"><ol>
+    <li><b>블록 번호:</b> <code>blockIdx.x</code>는 내가 몇 번째 블록인지입니다.</li>
+    <li><b>블록 크기:</b> <code>blockDim.x</code>는 블록 하나에 스레드가 몇 개인지입니다.</li>
+    <li><b>블록 안 번호:</b> <code>threadIdx.x</code>는 블록 안에서 몇 번째인지입니다.</li>
+    <li><b>전체 번호:</b> 블록 번호 곱하기 블록 크기, 더하기 블록 안 번호입니다. 블록 크기가 256이고 블록 번호가 2, 블록 안 번호가 5라면, 2 곱하기 256 더하기 5, 517번 원소를 맡습니다.</li>
+  </ol></div>
+  <figure class="fig">
+    <div class="fig-title">스레드 번호 계산기</div>
+    <div class="seg" id="i-dim"></div>
+    <div class="seg" id="i-blk"></div>
+    <div class="seg" id="i-thr"></div>
+    <div class="split">
+      <div class="scroll-x"><svg id="iSvg" viewBox="0 0 420 120" width="100%" role="img" aria-label="블록 4개와 선택한 스레드의 위치"></svg></div>
+      <div class="panel" id="iPanel" aria-live="polite"></div>
+    </div>
+    <div class="legend"><span><i class="sw" style="background:var(--idle)"></i>블록</span><span><i class="sw" style="background:var(--accent)"></i>선택한 스레드가 맡는 원소</span></div>
+    <figcaption>가로 막대 하나가 블록 하나입니다. 블록 4개까지만 그렸습니다.</figcaption>
+  </figure>
+  <h3>2. 범위 확인</h3>
+  <div class="prose"><ul>
+    <li>스레드는 블록 크기 단위로 만들어집니다. 데이터 수가 나눠떨어지지 않으면 마지막 블록에 남는 스레드가 생깁니다.</li>
+    <li>그래서 <code>if (i &lt; n)</code>으로, 범위를 벗어난 스레드가 메모리를 건드리지 않게 막습니다.</li>
+  </ul></div>
+  <details>
+    <summary>Q. 데이터가 1,000개이고 블록 크기가 256이면, 남는 스레드는 몇 개인가요?</summary>
+    <div class="prose"><p>블록 4개, 스레드 1,024개가 만들어집니다. 1,000개를 빼면 24개가 남습니다. 이 24개가 범위 확인에 걸려 아무것도 하지 않습니다.</p></div>
+  </details>
+  <h3>3. 데이터가 스레드보다 많을 때</h3>
+  <p class="prose">스레드 하나가 여러 원소를 차례로 맡습니다. 이걸 grid-stride loop라고 합니다. 4.8에서 봅니다.</p>
+</section>
+
+<section class="ch" id="s2-5">
+  <div class="ch-head"><span class="ch-num">2.5</span><h2>이점</h2></div>
+  <div class="prose"><ul>
+    <li><b>매우 가볍습니다:</b> 레지스터가 미리 나눠져 있어서 만들고 바꾸는 비용이 거의 없습니다.</li>
+    <li><b>아주 많이 올라갑니다:</b> H100 SXM은 SM 132개에 2,048개씩, 약 27만 개가 동시에 올라갑니다.</li>
+    <li><b>코드가 단순합니다:</b> 원소 하나에 대한 처리만 적으면 됩니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-6">
+  <div class="ch-head"><span class="ch-num">2.6</span><h2>부재 시 문제</h2></div>
+  <p class="prose">개별 스레드라는 단위가 없다고 가정해 보면, 이런 문제가 생깁니다.</p>
+  <div class="prose"><ul>
+    <li>병렬 작업을 벡터 명령, 즉 SIMD로 직접 다뤄야 합니다. CPU의 AVX 코드를 손으로 쓰는 것과 비슷해서 난이도가 크게 오릅니다.</li>
+    <li>원소마다 다른 길을 가는 코드, 예를 들어 if문을 표현하기 어렵습니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-7">
+  <div class="ch-head"><span class="ch-num">2.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>하나하나는 느립니다:</b> CPU 코어보다 클럭이 낮고, 분기 예측 같은 장치가 없습니다. 많이 써야 빠릅니다.</li>
+    <li><b>혼자 움직이지 않습니다:</b> 항상 32개, 즉 warp 단위로 함께 실행됩니다. PART 5에서 봅니다.</li>
+    <li><b>레지스터를 많이 쓰면 덜 올라갑니다:</b> 2회차 4.4에서 본 점유율 계산이 바로 이 부분입니다.</li>
+    <li><b>같은 곳에 쓰면 충돌합니다:</b> 여러 스레드가 같은 메모리 위치에 동시에 쓰면 결과가 꼬입니다. 이걸 <button class="t" data-t="race">경쟁 상태</button>, 영어로 race condition이라고 합니다.</li>
+  </ul></div>
+  <details>
+    <summary>Q. 경쟁 상태는 실제로 어떻게 생기나요?</summary>
+    <div class="prose"><p>스레드 100개가 합계 변수 하나에 1씩 더한다고 해 보겠습니다. 더하기는 "읽고, 더하고, 쓰기" 세 단계입니다. 두 스레드가 같은 값을 동시에 읽고 각자 1을 더해 쓰면, 2가 늘어야 할 것이 1만 늡니다. 그래서 결과가 100보다 작게 나올 수 있고, 실행할 때마다 값이 달라집니다.</p></div>
+  </details>
+</section>
+
+<section class="ch" id="s2-8">
+  <div class="ch-head"><span class="ch-num">2.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. <button class="t" data-t="atomic">Atomic 연산</button></h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 읽고 더하고 쓰는 과정을 다른 스레드가 끼어들 수 없게 한 번에 처리하는 명령입니다. <code>atomicAdd</code>가 대표입니다.</li>
+    <li><b>해결하는 단점:</b> 경쟁 상태를 막습니다.</li>
+  </ul></div>
+  <h3>2. warp 단위 합계</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 같은 warp 안에서 레지스터 값을 직접 주고받아 먼저 합칩니다. 5.4에서 봅니다.</li>
+    <li><b>해결하는 단점:</b> atomic 연산 횟수를 32분의 1로 줄여서, 충돌로 기다리는 시간을 줄입니다.</li>
+  </ul></div>
+  <h3>3. <button class="t" data-t="ilp">ILP</button></h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 2회차 4.8에서 본 기법입니다. 스레드 하나가 서로 상관없는 계산 여러 개를 이어서 처리합니다.</li>
+    <li><b>해결하는 단점:</b> 레지스터를 많이 써서 스레드가 적게 올라가도 기다림을 숨깁니다.</li>
+  </ul></div>
+  <h3>4. 타일 단위 도구</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> Triton, cuTile Python처럼 개별 스레드를 감추고 데이터 조각 단위로 씁니다.</li>
+    <li><b>해결하는 단점:</b> 번호 계산과 범위 확인에서 생기는 실수를 줄입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-9">
+  <div class="ch-head"><span class="ch-num">2.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>구분</th><th>CPU 스레드</th><th>GPU 스레드</th></tr></thead>
+    <tbody>
+      <tr><td>관리 주체</td><td>운영체제</td><td>GPU 하드웨어</td></tr>
+      <tr><td>만들고 바꾸는 비용</td><td>마이크로초 단위</td><td>거의 0</td></tr>
+      <tr><td>동시에 올라가는 수</td><td>수십에서 수백</td><td>수십만 (H100 SXM 약 27만)</td></tr>
+      <tr><td>하나의 성능</td><td>높음 (복잡한 분기도 잘함)</td><td>낮음 (단순 반복에 적합)</td></tr>
+      <tr><td>실행 방식</td><td>각자 독립</td><td>32개가 같은 명령 (<button class="t" data-t="simt">SIMT</button>)</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>GPU 스레드는 하나의 속도가 아니라, 동시에 몇 개를 굴리느냐로 성능을 냅니다.</b></div>
+</section>
+
+<section class="ch" id="s2-10">
+  <div class="ch-head"><span class="ch-num">2.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. 스레드를 감추는 프로그래밍</h3>
+  <div class="prose"><ul>
+    <li>cuTile Python과 Triton은 스레드 번호를 코드에 드러내지 않습니다. 개발자는 타일만 다루고, 스레드 배치는 컴파일러가 정합니다.</li>
+    <li>2.4에서 본 번호 계산과 범위 확인을 직접 쓸 일이 줄어듭니다.</li>
+  </ul></div>
+  <h3>2. Python으로 쓰는 고성능 커널: CuTe DSL</h3>
+  <div class="prose"><ul>
+    <li>CuTe DSL은 NVIDIA의 행렬 곱셈 라이브러리 CUTLASS를 Python으로 쓰게 한 도구입니다.</li>
+    <li>FlashAttention-4가 이걸로 쓰였고, C++ 템플릿 방식보다 컴파일이 20에서 30배 빠르다고 보고했습니다.</li>
+  </ul></div>
+  <h3>3. 최고 성능 커널은 여전히 직접 다룹니다</h3>
+  <div class="prose"><ul>
+    <li>FlashAttention-3, 4 같은 커널은 스레드와 warp 수준까지 직접 제어합니다.</li>
+    <li>데이터센터용 Blackwell에서는 스레드 하나가 Tensor Core 명령을 냅니다. 스레드 하나의 역할이 커진 셈입니다. PART 5에서 봅니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>생산성은 스레드를 감추는 타일 모델로, 마지막 성능은 스레드를 직접 다루는 코드로 얻는 구도입니다.</b></div>
+</section>
+
+<!-- ============ PART 3 : Block ============ -->
+<div class="part" id="p3">
+  <div class="pk">PART 3</div>
+  <h2>Block (스레드 블록)</h2>
+  <p>여기까지가 스레드 하나였습니다. 이제 스레드를 묶은 단위, 블록을 보겠습니다. 2회차에서 블록이 SM 하나에 배정된다는 것까지 봤습니다.</p>
+</div>
+
+<section class="ch" id="s3-1">
+  <div class="ch-head"><span class="ch-num">3.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="block">블록</button>은 <b>같은 SM에서 함께 실행되는 스레드 묶음</b>입니다.</p>
+  <div class="prose"><ul>
+    <li>스레드를 최대 1,024개까지 묶습니다. 공식 문서에서는 CTA, 즉 Cooperative Thread Array라고도 부릅니다.</li>
+    <li>같은 블록의 스레드끼리만 Shared Memory를 함께 쓰고, 서로 기다려 줄 수 있습니다.</li>
+    <li>블록끼리는 서로 독립입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-2">
+  <div class="ch-head"><span class="ch-num">3.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li>스레드끼리 협력해야 하는 일이 많습니다. 데이터를 함께 불러와 여러 번 재사용하면 VRAM을 덜 읽기 때문입니다.</li>
+    <li>그런데 모든 스레드가 서로 협력하게 하면, 수십만 개를 한꺼번에 맞춰야 합니다. 그러면 GPU 크기에 맞춰 늘릴 수 없습니다.</li>
+  </ul></div>
+  <div class="callout idea">
+    <span class="say">"그럼 가까운 스레드끼리만 묶어서 협력하게 하고, 묶음끼리는 서로 모르게 하자!"</span>
+    그래서 2006년 CUDA와 함께 등장한 것이 바로 <b>블록</b>입니다.
+    <ul>
+      <li>블록 안에서는 협력하고, 블록끼리는 독립이라 어떤 GPU에서든 나눠 실행할 수 있습니다.</li>
+      <li>처음 G80에서는 블록당 스레드가 최대 512개였고, 2010년 Fermi부터 1,024개가 됐습니다.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="ch" id="s3-3">
+  <div class="ch-head"><span class="ch-num">3.3</span><h2>구조</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>구성</th><th>하는 일</th><th>한계 (H100)</th></tr></thead>
+    <tbody>
+      <tr><td><code>blockIdx</code></td><td>그리드 안에서 블록의 위치</td><td>1차원에서 3차원까지</td></tr>
+      <tr><td><code>blockDim</code></td><td>블록 크기</td><td>최대 1,024 스레드 (z축은 최대 64)</td></tr>
+      <tr><td><button class="t" data-t="smem">Shared Memory</button></td><td>블록 스레드끼리 데이터 공유</td><td>기본 48KB, 설정하면 최대 227KB</td></tr>
+      <tr><td>동기화 배리어</td><td><code>__syncthreads()</code>로 모두 도착할 때까지 대기</td><td>블록 안에서만</td></tr>
+    </tbody>
+  </table></div>
+  <p class="prose">H100부터는 블록 여러 개를 다시 묶은 Thread Block Cluster도 있습니다. 3.8에서 봅니다.</p>
+  <details>
+    <summary>Q. 왜 Shared Memory는 기본 48KB이고, 따로 설정해야 227KB까지 쓰나요?</summary>
+    <div class="prose"><p>예전 GPU와 맞추려고 기본 한도를 48KB로 두었습니다. 그보다 많이 쓰려면 커널마다 <code>cudaFuncSetAttribute</code>로 직접 허락해야 합니다. SM 전체의 228KB 중 1KB는 시스템이 쓰기 때문에, 블록 하나는 최대 227KB입니다.</p></div>
+  </details>
+</section>
+
+<section class="ch" id="s3-4">
+  <div class="ch-head"><span class="ch-num">3.4</span><h2>작동 방식</h2></div>
+  <h3>1. 실행 순서</h3>
+  <div class="prose"><ol>
+    <li><b>배정:</b> 커널이 시작되면 블록이 대기열에 오르고, 자원이 남는 SM에 하나씩 배정됩니다.</li>
+    <li><b>warp로 나누기:</b> 블록은 SM 안에서 32개씩 warp로 나뉩니다. 스레드 256개짜리 블록은 warp 8개입니다.</li>
+    <li><b>협력:</b> 블록 안의 스레드는 Shared Memory로 데이터를 나누고, <code>__syncthreads()</code>로 서로 기다립니다.</li>
+    <li><b>끝:</b> 블록이 끝나면 그 자리에 다음 블록이 들어옵니다. 블록끼리의 실행 순서는 정해져 있지 않습니다.</li>
+  </ol>
+  <p>2회차 1.4에서 본 실행 순서가 바로 이것입니다.</p></div>
+  <h3>2. 협력하는 코드</h3>
+  <pre><code>__shared__ float tile[256];          // 블록이 함께 쓰는 공간
+tile[threadIdx.x] = in[i];           // 각자 하나씩 불러오고
+__syncthreads();                     // 모두 불러올 때까지 기다린 뒤
+float v = tile[255 - threadIdx.x];   // 다른 스레드가 불러온 값을 씀</code></pre>
+  <div class="prose"><ul>
+    <li>각자 하나씩 VRAM에서 불러와 Shared Memory에 둡니다.</li>
+    <li>모두 불러올 때까지 기다립니다.</li>
+    <li>그다음 다른 스레드가 불러온 값을 VRAM을 다시 읽지 않고 씁니다.</li>
+  </ul></div>
+  <details>
+    <summary>Q. __syncthreads()를 빼면 어떻게 되나요?</summary>
+    <div class="prose"><p>다른 스레드가 아직 값을 넣지 않은 칸을 읽을 수 있습니다. 실행할 때마다 결과가 달라지는, 찾기 어려운 버그가 됩니다.</p></div>
+  </details>
+</section>
+
+<section class="ch" id="s3-5">
+  <div class="ch-head"><span class="ch-num">3.5</span><h2>이점</h2></div>
+  <div class="prose"><ul>
+    <li><b>데이터를 재사용합니다:</b> VRAM 대신 Shared Memory에서 여러 번 읽습니다. 행렬 곱셈에서 블록 하나가 128 곱하기 128 조각을 맡으면, 불러온 값을 수십 번 다시 씁니다.</li>
+    <li><b>저절로 늘어납니다:</b> 블록이 서로 독립이라, SM 24개 GPU든 132개 GPU든 같은 코드가 블록을 나눠 실행합니다.</li>
+    <li><b>자원 관리가 쉽습니다:</b> 레지스터와 Shared Memory를 블록 단위로 잡고 풉니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-6">
+  <div class="ch-head"><span class="ch-num">3.6</span><h2>부재 시 문제</h2></div>
+  <p class="prose">블록이라는 단위가 없다고 가정해 보면, 이런 문제가 생깁니다.</p>
+  <div class="prose"><ul>
+    <li>스레드끼리 데이터를 나눌 방법이 VRAM뿐이라, 메모리 대역폭이 병목이 됩니다.</li>
+    <li>반대로 모든 스레드가 서로 기다릴 수 있게 하면, GPU 크기에 맞춰 늘릴 수 없습니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-7">
+  <div class="ch-head"><span class="ch-num">3.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>블록끼리는 직접 주고받을 수 없습니다:</b> 필요하면 커널을 나누거나 atomic 연산을 써야 합니다.</li>
+    <li><b>크기를 잘 골라야 합니다:</b> 너무 작으면 SM을 못 채우고, 너무 크면 자원이 모자라 SM에 블록이 적게 올라갑니다.</li>
+    <li><b>한도가 있습니다:</b> 스레드 1,024개, Shared Memory 227KB를 넘을 수 없습니다.</li>
+  </ul></div>
+  <details>
+    <summary>Q. 블록끼리는 왜 기다리지 못하게 했나요?</summary>
+    <div class="prose"><p>블록 A가 블록 B를 기다리는데, B가 아직 SM에 올라오지 못했다고 해 보겠습니다. A는 SM 자리를 차지한 채 영원히 기다리고, B는 자리가 나지 않아 올라오지 못합니다. 이걸 교착 상태라고 합니다. SM이 적은 GPU일수록 잘 생기니, 블록을 독립으로 두어야 어떤 GPU에서든 같은 코드가 돕니다.</p></div>
+  </details>
+</section>
+
+<section class="ch" id="s3-8">
+  <div class="ch-head"><span class="ch-num">3.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. <button class="t" data-t="cluster">Thread Block Cluster</button> (H100부터)</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 2회차 1.8에서 본 기능입니다. 블록을 보통 최대 8개까지 묶어, 서로의 Shared Memory를 직접 읽게 합니다. 이 공간을 Distributed Shared Memory라고 부릅니다.</li>
+    <li><b>해결하는 단점:</b> 블록끼리 데이터를 나눌 때 VRAM까지 가지 않아도 됩니다.</li>
+  </ul></div>
+  <h3>2. <button class="t" data-t="coopgroups">Cooperative Groups</button></h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 스레드를 원하는 크기로 묶어 함께 기다리게 하는 기능입니다. 그리드 전체를 한 번에 기다리게 하는 <code>grid.sync()</code>도 있습니다.</li>
+    <li><b>해결하는 단점:</b> 블록끼리 맞춰야 할 때 커널을 나누지 않아도 됩니다. 단, 모든 블록이 동시에 SM에 올라갈 수 있을 만큼만 띄워야 합니다.</li>
+  </ul></div>
+  <h3>3. 블록 크기 추천 함수</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> <code>cudaOccupancyMaxPotentialBlockSize()</code>는 커널의 자원 사용량을 보고 점유율이 가장 높은 블록 크기를 추천합니다.</li>
+    <li><b>해결하는 단점:</b> 블록 크기를 감으로 고르는 문제를 줄입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-9">
+  <div class="ch-head"><span class="ch-num">3.9</span><h2>대안과의 비교</h2></div>
+  <p class="prose">협력하는 범위에 따라 쓰는 수단과 속도가 다릅니다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>협력 범위</th><th>공유 수단</th><th>기다리는 방법</th><th>속도</th></tr></thead>
+    <tbody>
+      <tr><td>warp (32 스레드)</td><td>레지스터 직접 교환 (shuffle)</td><td><code>__syncwarp</code></td><td>가장 빠름</td></tr>
+      <tr><td>블록 (최대 1,024)</td><td>Shared Memory</td><td><code>__syncthreads</code></td><td>빠름</td></tr>
+      <tr><td>Cluster (블록 최대 8개)</td><td>Distributed Shared Memory</td><td>cluster.sync</td><td>중간</td></tr>
+      <tr><td>그리드 전체</td><td>VRAM</td><td>커널 분리, grid.sync</td><td>느림</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>협력 범위가 넓어질수록 느려집니다.</b> 가능한 한 좁은 범위에서 협력하도록 짜는 것이 기본입니다.</div>
+</section>
+
+<section class="ch" id="s3-10">
+  <div class="ch-head"><span class="ch-num">3.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. Cluster가 본격적으로 쓰입니다</h3>
+  <div class="prose"><ul>
+    <li>CUTLASS 3과 4, FlashAttention-3 같은 H100 이후 커널이 Cluster로 같은 데이터를 여러 SM에 한 번에 뿌립니다. 이걸 <button class="t" data-t="tma">TMA</button> multicast라고 합니다.</li>
+    <li>VRAM에서 같은 데이터를 여러 번 읽지 않아도 됩니다.</li>
+  </ul></div>
+  <h3>2. 두 SM이 행렬 곱셈 하나를 함께 합니다</h3>
+  <div class="prose"><ul>
+    <li>데이터센터용 Blackwell은 같은 Cluster 안의 블록 두 개가 짝을 이뤄, 큰 행렬 곱셈 하나를 함께 합니다. 이걸 2-CTA MMA라고 부릅니다.</li>
+    <li>한 번에 맡을 수 있는 조각이 커져서 Shared Memory 왕래가 줄어듭니다.</li>
+    <li>FlashAttention-4는 이 방식으로 역전파 계산의 atomic 연산을 절반으로 줄였습니다.</li>
+  </ul></div>
+  <h3>3. 블록 단위 프로그래밍이 다시 주목받습니다</h3>
+  <div class="prose"><ul>
+    <li>CUDA Tile은 블록 하나를 프로그래밍 단위로 삼습니다. 블록 안의 스레드 배치는 컴파일러가 정합니다.</li>
+    <li>1.10에서 본 흐름과 같습니다. 개발자가 생각하는 단위가 스레드에서 블록으로 옮겨 갑니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>블록끼리 독립이라는 원칙은 그대로지만, 가까운 블록끼리 협력하는 범위는 세대마다 넓어지고 있습니다.</b></div>
+</section>
+
+<!-- ============ PART 4 : Grid ============ -->
+<div class="part" id="p4">
+  <div class="pk">PART 4</div>
+  <h2>Grid (그리드)</h2>
+  <p>여기까지가 블록이었습니다. 이제 커널 한 번 실행으로 만들어지는 블록 전체, 그리드를 보겠습니다.</p>
+</div>
+
+<section class="ch" id="s4-1">
+  <div class="ch-head"><span class="ch-num">4.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="grid">그리드</button>는 <b>커널 한 번 실행으로 만들어지는 블록 전체</b>입니다.</p>
+  <div class="prose"><ul>
+    <li>커널을 한 번 실행하면 그리드가 하나 만들어집니다.</li>
+    <li>블록을 1차원에서 3차원까지 배치할 수 있습니다.</li>
+    <li>데이터 크기에 맞춰 블록을 몇 개 만들지 정하는 가장 바깥 단위입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s4-2">
+  <div class="ch-head"><span class="ch-num">4.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li>데이터 크기는 GPU와 상관없이 정해집니다. 이미지 한 장은 GPU가 바뀌어도 픽셀 수가 같습니다.</li>
+    <li>문제를 몇 조각으로 나눌지를 SM 수에 맞춰 정하면, GPU가 바뀔 때마다 코드를 고쳐야 합니다.</li>
+  </ul></div>
+  <div class="callout idea">
+    <span class="say">"그럼 데이터 크기만 보고 조각 수를 정하고, 어느 SM에 줄지는 하드웨어에 맡기자!"</span>
+    그래서 2006년 CUDA와 함께 등장한 것이 바로 <b>그리드</b>입니다.
+    <ul>
+      <li>프로그래머는 블록 수만 정하고, 배정은 GigaThread Engine이 맡습니다.</li>
+      <li>처음에는 2차원까지였고, 2010년 Fermi부터 3차원 그리드를 쓸 수 있게 됐습니다.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="ch" id="s4-3">
+  <div class="ch-head"><span class="ch-num">4.3</span><h2>구조</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>구성</th><th>뜻</th><th>한계 (H100)</th></tr></thead>
+    <tbody>
+      <tr><td><code>gridDim</code></td><td>그리드 크기, 즉 블록 수</td><td>x축 최대 2³¹−1 (약 21억), y축과 z축 최대 65,535</td></tr>
+      <tr><td><code>blockIdx</code></td><td>그리드 안에서 블록의 위치</td><td>-</td></tr>
+    </tbody>
+  </table></div>
+  <p class="prose">이미지나 행렬처럼 2차원 데이터는 2차원 그리드로 짜면 번호 계산이 쉽습니다.</p>
+  <pre><code>dim3 block(16, 16);                               // 블록 하나 = 16 x 16 = 256 스레드
+dim3 grid((1920 + 15) / 16, (1080 + 15) / 16);    // 120 x 68 블록
+brighten&lt;&lt;&lt;grid, block&gt;&gt;&gt;(img);</code></pre>
+  <details>
+    <summary>Q. 기초 · 블록 수를 왜 (n + 255) / 256처럼 쓰나요?</summary>
+    <div class="prose"><p>올림 나눗셈입니다. 1,000을 256으로 나누면 몫이 3이지만 블록은 4개가 필요합니다. 255를 더한 뒤 나누면 4가 나옵니다.</p></div>
+  </details>
+</section>
+
+<section class="ch" id="s4-4">
+  <div class="ch-head"><span class="ch-num">4.4</span><h2>작동 방식</h2></div>
+  <p class="prose">블록들은 SM에 여러 차례에 걸쳐 채워집니다. 2회차 4.8에서 본 <button class="t" data-t="wave">wave</button>가 이 한 차례입니다.</p>
+  <div class="prose"><ol>
+    <li><b>한 번에 올라가는 블록 수:</b> SM 수 곱하기 SM당 블록 수입니다. H100 SXM에서 256 스레드 블록이 SM마다 8개 올라가면, 132 곱하기 8, 1,056개입니다.</li>
+    <li><b>필요한 블록 수:</b> 원소 100만 개를 256개씩 나누면 블록 3,907개입니다.</li>
+    <li><b>wave 수:</b> 3,907 나누기 1,056, 약 3.7 wave입니다.</li>
+    <li><b>마지막 wave:</b> 네 번째 wave는 약 70%만 찹니다. 나머지 SM은 놉니다.</li>
+  </ol></div>
+  <figure class="fig">
+    <div class="fig-title">wave 계산기</div>
+    <div class="seg" id="w-gpu"></div>
+    <div class="seg" id="w-n"></div>
+    <div class="seg" id="w-bs"></div>
+    <div class="split">
+      <div class="scroll-x"><svg id="wSvg" viewBox="0 0 420 200" width="100%" role="img" aria-label="wave마다 SM이 얼마나 차는지"></svg></div>
+      <div class="panel" id="wPanel" aria-live="polite"></div>
+    </div>
+    <div class="legend"><span><i class="sw" style="background:var(--accent)"></i>일하는 SM</span><span><i class="sw" style="background:var(--idle)"></i>노는 SM</span></div>
+    <figcaption>예시입니다. 레지스터와 Shared Memory 한도는 빼고, SM당 스레드 수와 블록 수 한도만으로 계산했습니다. wave가 많으면 처음 몇 개와 마지막 wave만 그립니다.</figcaption>
+  </figure>
+  <details>
+    <summary>Q. 그리드를 크게 잡으면 무조건 좋나요?</summary>
+    <div class="prose"><p>GPU를 채우려면 충분히 커야 합니다. 하지만 너무 잘게 쪼개면 블록마다 반복되는 준비 작업이 늘어납니다. 그래서 4.8의 grid-stride loop처럼 블록 수를 SM 수의 몇 배로 고정하는 방식도 많이 씁니다.</p></div>
+  </details>
+</section>
+
+<section class="ch" id="s4-5">
+  <div class="ch-head"><span class="ch-num">4.5</span><h2>이점</h2></div>
+  <div class="prose"><ul>
+    <li><b>데이터 크기만 보면 됩니다:</b> 블록 수만 정하면 하드웨어가 SM에 나눠 줍니다.</li>
+    <li><b>큰 GPU에서 저절로 빨라집니다:</b> 같은 그리드라도 SM이 많으면 wave 수가 줄어듭니다. 위 예시는 SM 24개인 RTX 4060에서 약 27 wave, H100 SXM에서 약 3.7 wave입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s4-6">
+  <div class="ch-head"><span class="ch-num">4.6</span><h2>부재 시 문제</h2></div>
+  <p class="prose">그리드라는 단위가 없다고 가정해 보면, 이런 문제가 생깁니다.</p>
+  <div class="prose"><ul>
+    <li>문제를 SM 수에 맞춰 직접 나눠야 해서, GPU가 바뀔 때마다 코드를 고쳐야 합니다.</li>
+    <li>데이터 크기와 하드웨어 크기가 한 코드에 섞여 관리하기 어렵습니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s4-7">
+  <div class="ch-head"><span class="ch-num">4.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>마지막 wave가 비면 손해입니다:</b> 이걸 wave quantization, 우리말로 꼬리 효과라고 합니다. 1.05 wave면 거의 2 wave만큼 시간이 걸립니다.</li>
+    <li><b>블록이 적으면 GPU 일부만 씁니다:</b> 블록이 64개뿐이면 SM 132개 중 68개는 일을 받지 못합니다.</li>
+    <li><b>그리드 전체가 서로 기다릴 수 없습니다:</b> 기본적으로는 커널을 나눠야 합니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s4-8">
+  <div class="ch-head"><span class="ch-num">4.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. <button class="t" data-t="gridstride">Grid-stride loop</button></h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 블록 수를 SM 수의 몇 배로 고정하고, 스레드 하나가 여러 원소를 반복해서 맡습니다.</li>
+    <li><b>해결하는 단점:</b> 데이터가 커져도 블록 수가 고정돼서, 꼬리 효과가 줄어듭니다.</li>
+  </ul></div>
+  <pre><code>for (int i = blockIdx.x * blockDim.x + threadIdx.x; i &lt; n; i += gridDim.x * blockDim.x)
+    out[i] = in[i] * 2;   // 그리드 전체 스레드 수만큼 건너뛰며 반복</code></pre>
+  <h3>2. Persistent Kernel</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 1.8에서 본 방식입니다. 블록을 SM 수만큼만 띄워 두고, 대기열에서 일을 계속 가져옵니다.</li>
+    <li><b>해결하는 단점:</b> 꼬리 효과와 실행 비용을 거의 없앱니다. 대신 구현이 어렵습니다.</li>
+  </ul></div>
+  <h3>3. Stream-K, Split-K</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 행렬 곱셈의 작업을 SM 수에 맞게 잘게 나눠, 모든 SM이 거의 같이 끝나게 합니다.</li>
+    <li><b>해결하는 단점:</b> 행렬 곱셈의 꼬리 효과를 줄입니다.</li>
+  </ul></div>
+  <h3>4. grid.sync()</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 3.8에서 본 Cooperative Groups 기능입니다. 그리드 전체를 한 번에 기다리게 합니다.</li>
+    <li><b>해결하는 단점:</b> 그리드 전체를 맞추려고 커널을 나누지 않아도 됩니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s4-9">
+  <div class="ch-head"><span class="ch-num">4.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>방식</th><th>블록 수</th><th>꼬리 효과</th><th>특징</th></tr></thead>
+    <tbody>
+      <tr><td>원소당 스레드 (기본)</td><td>데이터에 비례</td><td>있음</td><td>가장 단순</td></tr>
+      <tr><td>Grid-stride loop</td><td>고정 (SM 수의 몇 배)</td><td>줄어듦</td><td>데이터 크기와 상관없이 재사용</td></tr>
+      <tr><td>Persistent Kernel</td><td>SM 수</td><td>거의 없음</td><td>실행 1회, 구현 복잡</td></tr>
+      <tr><td>Stream-K</td><td>SM 수</td><td>거의 없음</td><td>행렬 곱셈 전용</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="ch" id="s4-10">
+  <div class="ch-head"><span class="ch-num">4.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. 하드웨어가 일을 나눠 줍니다: Cluster Launch Control</h3>
+  <div class="prose"><ul>
+    <li>데이터센터용 Blackwell은 Cluster Launch Control, 줄여서 <button class="t" data-t="clc">CLC</button>를 지원합니다.</li>
+    <li>먼저 올라간 블록이, 아직 시작하지 않은 블록의 일을 가져갑니다. 일을 빼앗긴 블록은 실행이 취소됩니다.</li>
+    <li>다른 커널이 SM 일부를 쓰고 있어도 일이 고르게 나뉩니다. 4.8에서 본 Persistent Kernel을 하드웨어가 돕는 셈입니다.</li>
+  </ul></div>
+  <h3>2. 들쭉날쭉한 입력이 과제입니다</h3>
+  <div class="prose"><ul>
+    <li>LLM 추론은 요청마다 입력 길이가 달라서, 그리드 크기가 SM 수와 잘 맞지 않는 경우가 많습니다.</li>
+    <li>그래서 Stream-K나 Persistent Kernel처럼 블록 수를 SM 수에 맞추는 방식이 널리 쓰입니다.</li>
+  </ul></div>
+  <h3>3. SM이 늘수록 꼬리 효과가 커집니다</h3>
+  <div class="prose"><ul>
+    <li>Rubin은 SM이 224개입니다. 한 wave에 들어가는 블록이 많아져서, 작은 작업일수록 GPU를 다 채우기 어렵습니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>그리드는 "데이터 크기만큼 띄우는 것"에서 "SM 수만큼 띄우고 일을 나눠 주는 것"으로 바뀌고 있습니다.</b></div>
+</section>
+
+<!-- ============ PART 5 : Warp ============ -->
+<div class="part" id="p5">
+  <div class="pk">PART 5</div>
+  <h2>Warp (워프)</h2>
+  <p>여기까지 커널, 스레드, 블록, 그리드를 봤습니다. 넷은 프로그래머가 정하는 단위였습니다. 마지막으로 하드웨어가 정하는 실행 단위, warp를 보겠습니다. 2회차에서 warp를 짧게 봤다면, 오늘은 warp가 성능에 주는 영향을 봅니다.</p>
+</div>
+
+<section class="ch" id="s5-1">
+  <div class="ch-head"><span class="ch-num">5.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="warp">warp</button>는 <b>하드웨어가 실제로 한꺼번에 실행하는 32개 스레드 묶음</b>입니다.</p>
+  <div class="prose"><ul>
+    <li>32개 스레드가 같은 명령을 각자 다른 데이터에 동시에 실행합니다. 이걸 SIMT, 즉 명령 하나에 스레드 여러 개라고 부릅니다.</li>
+    <li>프로그래머가 만들지 않습니다. 하드웨어가 블록을 32개씩 자동으로 나눕니다.</li>
+    <li>이름은 베틀에 나란히 걸린 날실, 영어로 warp에서 왔습니다. 실이라는 뜻의 thread와 짝을 이루는 말입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s5-2">
+  <div class="ch-head"><span class="ch-num">5.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li>스레드마다 명령을 따로 읽고 해석하면, 제어 회로가 계산 회로보다 커집니다.</li>
+    <li>그래픽에서는 이웃한 픽셀들이 거의 같은 계산을 했습니다. 명령을 함께 써도 손해가 적었습니다.</li>
+  </ul></div>
+  <div class="callout idea">
+    <span class="say">"그럼 32개 스레드가 명령 하나를 함께 쓰게 하자!"</span>
+    그래서 2006년 G80에서 처음 등장한 것이 바로 <b>warp</b>입니다.
+    <ul>
+      <li>명령을 읽는 비용을 32개가 나눠 내서, 아낀 면적에 계산 유닛을 더 넣었습니다.</li>
+      <li>프로그래머에게는 스레드 하나하나로 보이고, 하드웨어는 묶음으로 처리합니다.</li>
+      <li>32라는 크기는 G80부터 지금까지 그대로입니다. 이유는 2회차 1.4에서 봤습니다.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="ch" id="s5-3">
+  <div class="ch-head"><span class="ch-num">5.3</span><h2>구조</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>구성</th><th>뜻</th><th>H100 기준</th></tr></thead>
+    <tbody>
+      <tr><td>나누는 규칙</td><td>블록 안 번호 순서대로 32개씩</td><td>0번에서 31번, 32번에서 63번 …</td></tr>
+      <tr><td>lane</td><td>warp 안에서의 번호</td><td>0부터 31</td></tr>
+      <tr><td><button class="t" data-t="scheduler">Warp Scheduler</button></td><td>매 사이클 warp 하나에 명령을 줌</td><td class="num">SM당 4개</td></tr>
+      <tr><td>SM당 최대 warp</td><td>동시에 대기할 수 있는 warp</td><td class="num">64개</td></tr>
+      <tr><td>warpgroup</td><td>Tensor Core 명령을 함께 내는 warp 4개</td><td>H100부터, 128 스레드</td></tr>
+    </tbody>
+  </table></div>
+  <details>
+    <summary>Q. 기초 · 내가 몇 번 warp의 몇 번 lane인지는 어떻게 구하나요?</summary>
+    <div class="prose"><p>블록 안 번호인 threadIdx.x를 32로 나눈 몫이 warp 번호이고, 나머지가 lane 번호입니다. 예를 들어 70번 스레드는 2번 warp의 6번 lane입니다.</p></div>
+  </details>
+</section>
+
+<section class="ch" id="s5-4">
+  <div class="ch-head"><span class="ch-num">5.4</span><h2>작동 방식</h2></div>
+  <h3>1. 분기 (Divergence)</h3>
+  <p class="prose">2회차 1.7에서 본 <button class="t" data-t="divergence">분기</button>를 코드로 보면 이렇습니다.</p>
+  <pre><code>if (threadIdx.x % 2 == 0) A(); else B();         // 나쁨: 같은 warp 안에서 갈림. A와 B를 차례로 실행
+if ((threadIdx.x / 32) % 2 == 0) A(); else B();  // 좋음: warp 단위로 갈림. 손해 없음</code></pre>
+  <div class="prose"><ul>
+    <li>첫 줄은 같은 warp 안에서 짝수와 홀수가 갈립니다. A와 B를 차례로 실행해서 시간이 두 배 걸립니다.</li>
+    <li>둘째 줄은 warp 단위로 갈립니다. 어떤 warp는 A만, 다른 warp는 B만 실행해서 손해가 없습니다.</li>
+  </ul></div>
+  <h3>2. 메모리 병합 (Coalescing)</h3>
+  <div class="prose"><ul>
+    <li>warp의 32개 스레드가 이웃한 주소를 읽으면, 하드웨어가 읽기를 몇 번으로 합칩니다. 이걸 <button class="t" data-t="coalescing">메모리 병합</button>이라고 합니다.</li>
+    <li>예를 들어 4바이트 숫자 32개, 모두 128바이트를 32바이트 묶음 네 번으로 읽습니다.</li>
+    <li>주소가 흩어져 있으면 묶음을 따로따로 읽어서 최대 32번까지 늘어납니다.</li>
+  </ul></div>
+  <figure class="fig">
+    <div class="fig-title">메모리 병합 비교</div>
+    <div class="seg" id="c-mode"></div>
+    <div class="scroll-x"><svg id="cSvg" width="100%" role="img" aria-label="warp의 스레드 32개가 읽는 메모리 묶음"></svg></div>
+    <div class="note" id="c-desc"></div>
+    <div class="legend"><span><i class="sw" style="background:var(--accent)"></i>스레드가 읽는 칸</span><span><i class="sw" style="background:var(--mem)"></i>읽어 와야 하는 32바이트 묶음</span><span><i class="sw" style="background:var(--idle)"></i>읽지 않는 묶음</span></div>
+    <figcaption>위쪽 줄이 warp의 스레드 32개, 아래쪽 칸이 메모리입니다. 메모리 칸 하나는 4바이트 숫자 하나이고, 칸 8개가 32바이트 묶음 하나입니다. 흩어진 경우는 스레드마다 32칸씩 떨어진 주소를 읽는 예시입니다.</figcaption>
+  </figure>
+  <h3>3. warp 안에서 값 주고받기 (Shuffle)</h3>
+  <div class="prose"><ul>
+    <li><code>__shfl_down_sync</code>로 Shared Memory를 거치지 않고 다른 lane의 레지스터 값을 직접 받습니다. 이걸 <button class="t" data-t="shuffle">warp shuffle</button>이라고 합니다.</li>
+    <li>32개 값의 합계를 다섯 번 만에 구합니다. 16칸, 8칸, 4칸, 2칸, 1칸 떨어진 값을 차례로 받아 더합니다.</li>
+  </ul></div>
+  <details>
+    <summary>Q. Volta부터 생긴 독립 스레드 스케줄링은 무엇이 바뀌었나요?</summary>
+    <div class="prose"><p>스레드마다 프로그램 카운터를 따로 둬서, 분기 중에도 스레드끼리 서로를 기다리는 코드가 멈추지 않게 됐습니다. 다만 분기의 시간 손해는 그대로입니다. 갈린 길은 여전히 차례로 실행됩니다.</p></div>
+  </details>
+</section>
+
+<section class="ch" id="s5-5">
+  <div class="ch-head"><span class="ch-num">5.5</span><h2>이점</h2></div>
+  <div class="prose"><ul>
+    <li><b>제어 회로를 아낍니다:</b> 명령 해석을 32개가 함께 해서, 같은 면적에 계산 유닛을 더 넣습니다. 2회차에서 본 SM 하나에 CUDA Core 128개가 그 결과입니다.</li>
+    <li><b>바꾸는 비용이 없습니다:</b> warp마다 레지스터가 따로 있어서 매 사이클 다른 warp로 바꿀 수 있습니다. 2회차의 <button class="t" data-t="latency">지연 은닉</button>이 이 덕분입니다.</li>
+    <li><b>메모리를 묶어 읽습니다:</b> 이웃 주소를 읽으면 32번 읽을 것을 네 번으로 줄입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s5-6">
+  <div class="ch-head"><span class="ch-num">5.6</span><h2>부재 시 문제</h2></div>
+  <p class="prose">warp 같은 묶음이 없다고 가정해 보면, 이런 문제가 생깁니다.</p>
+  <div class="prose"><ul>
+    <li>스레드마다 명령을 따로 처리해야 해서, CPU처럼 제어 회로가 커집니다.</li>
+    <li>같은 칩 면적에 넣을 수 있는 계산 유닛이 크게 줄어듭니다.</li>
+    <li>메모리를 스레드마다 따로 읽어서 대역폭을 많이 씁니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s5-7">
+  <div class="ch-head"><span class="ch-num">5.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>분기가 많으면 느립니다:</b> 길이 갈릴 때마다 차례로 실행합니다.</li>
+    <li><b>흩어진 주소는 느립니다:</b> 데이터 배치가 나쁘면 대역폭을 낭비합니다.</li>
+    <li><b>32의 배수가 아니면 빈칸이 생깁니다:</b> 2회차 4.4에서 본 대로, 블록이 스레드 100개면 마지막 warp는 4칸만 일합니다.</li>
+    <li><b>다른 회사 GPU로 옮길 때 문제가 됩니다:</b> 32를 가정한 코드는, 64개가 한 묶음인 AMD 데이터센터 GPU에서 틀릴 수 있습니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s5-8">
+  <div class="ch-head"><span class="ch-num">5.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. 분기 줄이기</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 데이터를 미리 정렬해 같은 warp가 같은 길을 가게 하거나, if문 대신 계산식을 씁니다.</li>
+    <li><b>해결하는 단점:</b> 분기로 생기는 시간 손해를 줄입니다.</li>
+  </ul></div>
+  <h3>2. SoA 데이터 배치</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 구조체의 배열, 즉 AoS 대신 배열의 구조체, 즉 SoA로 저장합니다. 점마다 x, y, z를 묶어 두지 않고, x끼리, y끼리, z끼리 모읍니다.</li>
+    <li><b>해결하는 단점:</b> 이웃한 스레드가 이웃한 주소를 읽게 돼서, 메모리 병합이 됩니다.</li>
+  </ul></div>
+  <h3>3. <button class="t" data-t="warpspec">Warp Specialization</button></h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> warp마다 역할을 나눕니다. 일부 warp는 데이터만 불러오고, 나머지 warp는 계산만 합니다. FlashAttention-3이 대표 예입니다.</li>
+    <li><b>해결하는 단점:</b> 데이터 불러오기와 계산을 겹쳐 기다림을 숨깁니다.</li>
+  </ul></div>
+  <h3>4. warpSize 사용</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 32를 코드에 직접 쓰지 않고 내장 변수 <code>warpSize</code>를 씁니다.</li>
+    <li><b>해결하는 단점:</b> 묶음 크기가 다른 GPU로 옮길 때 생기는 문제를 줄입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s5-9">
+  <div class="ch-head"><span class="ch-num">5.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>구분</th><th>NVIDIA warp</th><th>AMD wavefront</th><th>Intel 서브그룹</th><th>CPU SIMD (AVX-512)</th></tr></thead>
+    <tbody>
+      <tr><td>폭</td><td>32 스레드</td><td>64 (데이터센터용 CDNA), 32 (게이밍용 RDNA)</td><td>16 또는 32</td><td>FP32 16개</td></tr>
+      <tr><td>코드 쓰는 법</td><td>스레드 단위 (하드웨어가 묶음)</td><td>스레드 단위</td><td>스레드 단위</td><td>벡터 명령 직접 사용 또는 컴파일러 자동</td></tr>
+      <tr><td>분기 처리</td><td>하드웨어 마스크</td><td>하드웨어 마스크</td><td>하드웨어 마스크</td><td>마스크 레지스터</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>그리드, 블록, 스레드는 프로그래밍 단위이고, warp는 실행 단위입니다.</b> 코드는 스레드 하나로 쓰지만, 성능은 32개가 함께 움직이는 방식으로 정해집니다.</div>
+</section>
+
+<section class="ch" id="s5-10">
+  <div class="ch-head"><span class="ch-num">5.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. Warp Specialization이 표준이 됐습니다</h3>
+  <div class="prose"><ul>
+    <li>5.8에서 본 Warp Specialization이 FlashAttention-3과 4, ThunderKittens, CUTLASS 같은 최신 고성능 커널의 기본 패턴이 됐습니다.</li>
+    <li>FlashAttention-4는 B200에서 BF16 기준 최대 1,613 TFLOPS, 이론 성능의 약 71%를 냈다고 보고했습니다. cuDNN 9.13보다 최대 1.3배 빠릅니다.</li>
+  </ul></div>
+  <h3>2. Tensor Core 명령을 스레드 하나가 냅니다</h3>
+  <div class="prose"><ul>
+    <li>H100에서는 warp 4개, 즉 warpgroup이 함께 행렬 곱셈 명령을 냈습니다.</li>
+    <li>데이터센터용 Blackwell에서는 스레드 하나가 tcgen05라는 명령을 내고, 결과는 <button class="t" data-t="tmem">TMEM</button>이라는 전용 메모리에 쌓입니다.</li>
+    <li>레지스터 부담이 줄어서, warp마다 역할을 나누기가 더 쉬워졌습니다.</li>
+    <li>게이밍용 RTX 5090에는 TMEM이 없어서 이 방식을 쓸 수 없습니다.</li>
+  </ul></div>
+  <h3>3. warp를 감추는 흐름</h3>
+  <div class="prose"><ul>
+    <li>cuTile, Triton 같은 타일 모델은 warp를 코드에서 감춥니다.</li>
+    <li>warp를 직접 다룰지, 컴파일러에 맡길지가 성능과 생산성 사이의 선택이 됐습니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>최신 GPU에서 warp는 "같은 일을 하는 32개 묶음"에서 "역할을 나눠 맡는 단위"로 바뀌고 있습니다.</b></div>
+</section>
+
+<p class="prose">여기까지가 3회차였습니다. 2회차 Tensor Core에서 잠깐 본 FP32, BF16, FP8 같은 숫자 형식은 4회차에서 자세히 다룹니다.</p>
+
+<section class="ch" id="refs">
+  <div class="ch-head"><span class="ch-num">+</span><h2>참고</h2></div>
+  <div class="prose"><ul>
+    <li><a href="https://docs.nvidia.com/cuda/cuda-c-programming-guide/" target="_blank" rel="noopener">CUDA C++ Programming Guide — Programming Model</a></li>
+    <li><a href="https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/" target="_blank" rel="noopener">CUDA C++ Best Practices Guide</a></li>
+    <li><a href="https://developer.nvidia.com/cuda/tile" target="_blank" rel="noopener">NVIDIA CUDA Tile</a></li>
+    <li><a href="https://hihat.opencommons.org/images/7/7b/Intro_to_CUDA_Tile_Jan_2026.pdf" target="_blank" rel="noopener">Intro to CUDA Tile (2026.1 발표 자료)</a></li>
+    <li><a href="https://arxiv.org/abs/2407.08608" target="_blank" rel="noopener">FlashAttention-3 논문</a></li>
+    <li><a href="https://docs.nvidia.com/nsight-compute/" target="_blank" rel="noopener">Nsight Compute Documentation</a></li>
+    <li><a href="https://developer.nvidia.com/blog/nvidia-cuda-13-3-enhances-gpu-development-with-tile-programming-in-c-compiler-autotuning-and-python-updates/" target="_blank" rel="noopener">CUDA 13.3: Tile Programming in C++ (2026)</a></li>
+    <li><a href="https://arxiv.org/abs/2512.22219" target="_blank" rel="noopener">Mirage Persistent Kernel (OSDI 2026)</a></li>
+    <li><a href="https://tridao.me/blog/2026/flash4/" target="_blank" rel="noopener">FlashAttention-4 (2026)</a></li>
+    <li><a href="https://docs.nvidia.com/cutlass/media/docs/cpp/blackwell_cluster_launch_control.html" target="_blank" rel="noopener">Blackwell Cluster Launch Control (CUTLASS)</a></li>
+  </ul></div>
+</section>
+
+<nav class="pager" id="pager" data-no="3" aria-label="회차 이동"></nav>
+</main>
+</div>
+
+<footer class="site"><div class="container">자료의 오류나 보충할 내용은 <a href="https://github.com/designerbohyun/domain-study/issues">GitHub 이슈</a>로 알려 주세요.</div></footer>
+<script src="../assets/terms.js"></script>
+<script src="../assets/sessions.js"></script>
+<script src="../assets/site.js"></script>
+<script src="03.js"></script>
+</body>
+</html>

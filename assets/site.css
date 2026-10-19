@@ -79,6 +79,7 @@ section.ch h3{font-size:1.05rem;margin-top:1.75rem}
 
 .tbl{overflow-x:auto;margin:1rem 0}
 .tbl table{min-width:480px;margin:0}
+.tbl.wide table{min-width:640px}
 td.num{font-variant-numeric:tabular-nums}
 pre{font-size:.82rem}
 

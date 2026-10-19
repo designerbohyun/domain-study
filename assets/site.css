@@ -196,3 +196,6 @@ h2:hover a.anchor,h2 a.anchor:focus{opacity:1}
 }
 
 @media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
+.fig pre.mermaid{background:none;border:0;padding:0;margin:0;white-space:pre;visibility:hidden;height:0;overflow:hidden}
+.mmd{text-align:center;overflow-x:auto}
+.mmd svg{max-width:100%;height:auto}

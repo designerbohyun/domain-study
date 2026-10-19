@@ -7,6 +7,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.0.6/css/pico.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
 <link rel="stylesheet" href="assets/site.css">
+<script>try{var t=localStorage.getItem("theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 </head>
 <body data-root=".">
 <header class="site"><nav class="container">
@@ -18,10 +19,11 @@
   <section class="hero">
     <div class="eyebrow">모든 회차 공용</div>
     <h1>용어 사전</h1>
-    <p>회차 자료에 나오는 용어를 한곳에 모았습니다. 이름이나 설명으로 검색하고, 분류로 좁혀 볼 수 있습니다.</p>
+    <p>회차 자료에 나오는 용어를 한곳에 모았습니다. 이름이나 설명으로 검색하고, 회차나 분류로 좁혀 볼 수 있습니다. 회차 자료를 보는 중에는 오른쪽 위 용어 검색이나 / 키로 바로 찾을 수 있습니다.</p>
   </section>
   <div class="gl-tools">
     <input id="g-q" type="search" placeholder="예: SM, warp, NVLink" aria-label="용어 검색">
+    <div class="seg" id="g-ses" aria-label="회차로 보기"></div>
     <div class="seg" id="g-cats"></div>
     <div class="note" id="g-count"></div>
   </div>

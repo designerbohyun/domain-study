@@ -1,0 +1,591 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>1회차 · GPU, GPGPU, CUDA · 도메인 스터디</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.0.6/css/pico.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body data-root="..">
+<header class="site"><nav class="container">
+  <ul><li><a class="brand" href="../">도메인 스터디</a></li></ul>
+  <ul><li><a href="../">스터디 목차</a></li><li><a href="../glossary.html">용어 사전</a></li></ul>
+</nav></header>
+
+<div class="container doc">
+<aside class="toc"><details open><summary>이 회차 목차</summary><ol id="toc"></ol></details></aside>
+<main>
+<header class="doc-head">
+  <div class="crumb"><a href="../">스터디 목차</a> / GPU 기본 구조 / 1회차</div>
+  <h1>1회차 · GPU, GPGPU, CUDA</h1>
+  <p>첫 회차에서는 세 단어를 차례로 봅니다. 그래픽 칩으로 태어난 <b>GPU</b>, 그 GPU를 계산기로 쓰자는 생각인 <b>GPGPU</b>, 그리고 그 생각을 NVIDIA GPU에서 실제로 구현한 플랫폼인 <b>CUDA</b>입니다. 기준 제품은 NVIDIA <button class="t" data-t="h100">H100</button>입니다.</p>
+  <div class="flow" aria-label="주제별 진행 순서"><span><b>1</b>정의</span><span><b>2</b>등장 배경</span><span><b>3</b>구조</span><span><b>4</b>작동 방식</span><span><b>5</b>이점</span><span><b>6</b>부재 시 문제</span><span><b>7</b>단점</span><span><b>8</b>대안 기술</span><span><b>9</b>대안과의 비교</span><span><b>10</b>실무 관점</span></div>
+</header>
+
+<!-- ============ PART 1 : GPU ============ -->
+<div class="part" id="p1">
+  <div class="pk">PART 1</div>
+  <h2>GPU (Graphics Processing Unit)</h2>
+  <p>먼저 GPU가 무엇이고, 왜 지금 AI의 중심에 있는지부터 보겠습니다.</p>
+</div>
+
+<section class="ch" id="s1-1">
+  <div class="ch-head"><span class="ch-num">1.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="gpu">GPU</button>는 원래 <b>3D 게임과 그래픽을 끊김 없이 그리기 위해 만든 칩</b>입니다. 오늘날에는 AI와 대규모 데이터 처리를 맡는 핵심 연산 장치가 됐습니다.</p>
+  <div class="prose"><ul>
+    <li>수백에서 수천 개의 작은 코어를 동시에 돌립니다.</li>
+    <li>그래서 많은 데이터를 한꺼번에 처리하는 일, 즉 병렬 연산에 특화돼 있습니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-2">
+  <div class="ch-head"><span class="ch-num">1.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li>컴퓨터의 메인 두뇌인 <button class="t" data-t="cpu">CPU</button>는 복잡한 판단은 잘하지만, 한 번에 하나씩 순서대로 처리하는 편입니다.</li>
+    <li>1990년대 후반, 컴퓨터 화면이 평면에서 입체로 바뀌면서 문제가 생겼습니다.</li>
+    <li>입체 화면을 부드럽게 그리려면, 수백만 개의 점과 면을 계산하고 빛을 입히는 단순 계산을 매초 엄청나게 해내야 했습니다.</li>
+    <li>이 일을 CPU 혼자 하려다 보니 화면이 뚝뚝 끊기거나 컴퓨터 전체가 먹통이 되기 일쑤였습니다.</li>
+  </ul></div>
+  <div class="callout idea">
+    <span class="say">"그럼 화면만 그리는 전용 칩을 따로 만들자!"</span>
+    그래서 등장한 것이 바로 <b>GPU</b>입니다.
+    <ul>
+      <li>복잡한 판단과 전체 관리는 여전히 CPU가 맡고, 화면을 그리는 대규모 단순 계산만 GPU에 넘겼습니다.</li>
+      <li>혼자 일하던 CPU와 달리, GPU는 수천 개의 코어가 동시에 일을 처리합니다.</li>
+      <li>게임을 위해 만든 이 칩이, 지금은 엄청난 양의 데이터를 학습해야 하는 AI와 딥러닝의 가장 중요한 하드웨어가 됐습니다.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="ch" id="s1-3">
+  <div class="ch-head"><span class="ch-num">1.3</span><h2>구조</h2></div>
+  <h3>1. 연산 계층: 회사 조직에 비유하기</h3>
+  <div class="prose">
+    <p>GPU 안은 회사 조직처럼 생겼습니다. GPU가 회사라면 <button class="t" data-t="gpc">GPC</button>는 본부, <button class="t" data-t="tpc">TPC</button>는 부서, <button class="t" data-t="sm">SM</button>은 팀, 코어는 팀원입니다.</p>
+    <ul>
+      <li><b>SM:</b> 실제 연산의 기본 단위입니다. H100 SXM에는 SM이 132개, 즉 일하는 팀이 132개 있습니다.</li>
+      <li><b><button class="t" data-t="tensorcore">Tensor Core</button>:</b> 행렬 연산을 전담하는 팀원입니다. AI 연산에서 핵심 역할을 합니다.</li>
+      <li><b>그 밖의 코어:</b> 일반 연산을 하는 <button class="t" data-t="cudacore">CUDA Core</button>, 빛 반사 계산을 전담하는 RT Core가 있습니다.</li>
+      <li>SM 안쪽의 자세한 구조는 2회차에서 다룹니다.</li>
+    </ul>
+  </div>
+  <h3>2. 메모리 계층: 가까울수록 빠르고 작다</h3>
+  <p class="prose">데이터가 계산 장치에 가까울수록 빠르지만 용량이 작고, 멀어질수록 느리지만 용량이 커집니다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>계층</th><th>위치</th><th>특징</th><th>H100 기준</th></tr></thead>
+    <tbody>
+      <tr><td><button class="t" data-t="register">레지스터</button></td><td>코어 바로 앞</td><td>가장 빠름. 스레드마다 자기 몫이 따로 있음</td><td>SM당 256KB</td></tr>
+      <tr><td><button class="t" data-t="smem">Shared Memory</button> · L1 캐시</td><td>SM 안쪽</td><td>같은 팀끼리 공유. Shared는 개발자가, L1은 하드웨어가 관리</td><td>SM당 256KB를 나눠 씀 (Shared 최대 228KB)</td></tr>
+      <tr><td><button class="t" data-t="l2">L2 캐시</button></td><td>모든 SM과 VRAM 사이</td><td>모든 팀이 공유</td><td>50MB</td></tr>
+      <tr><td>VRAM (<button class="t" data-t="hbm">HBM</button> 또는 <button class="t" data-t="gddr">GDDR</button>)</td><td>GPU 기판의 대형 메모리</td><td>모델 가중치와 데이터를 두는 거대한 창고. 느리지만 용량이 큼</td><td>HBM3 80GB (SXM)</td></tr>
+    </tbody>
+  </table></div>
+  <details>
+    <summary>HBM과 GDDR은 무엇이 다른가요?</summary>
+    <div class="prose">
+      <p><b>GDDR</b>은 게이밍 그래픽카드에 주로 쓰는 메모리입니다. GPU 칩 주변 기판에 메모리 칩을 평면으로 나란히 붙입니다. 비교적 저렴하면서 빨라서 소비자용으로 가성비가 좋습니다.</p>
+      <p><b>HBM</b>은 H100, B200 같은 AI 가속기에 쓰는 최상급 메모리입니다. 메모리 칩을 햄버거처럼 수직으로 층층이 쌓고, GPU 칩 바로 옆에 밀착해 붙입니다. 데이터가 지나가는 통로가 훨씬 넓어서 대용량 데이터를 아주 빠르게 주고받지만, 가격이 매우 비쌉니다.</p>
+    </div>
+  </details>
+  <h3>3. 외부 장치와의 연결</h3>
+  <p class="prose">GPU가 혼자 일하는 경우는 드뭅니다. CPU와 협력하거나 다른 GPU와 힘을 합칠 때 쓰는 전용 통신망이 있습니다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>연결</th><th>무엇과 무엇을</th><th>비유</th><th>특징</th></tr></thead>
+    <tbody>
+      <tr><td><button class="t" data-t="pcie">PCIe</button></td><td>CPU와 GPU</td><td>일반 고속도로</td><td>컴퓨터의 가장 기본적인 표준 연결 통로</td></tr>
+      <tr><td><button class="t" data-t="nvlink">NVLink</button></td><td>GPU와 GPU</td><td>GPU 전용 특급 도로</td><td>H100은 GPU당 초당 900GB. PCIe 5.0보다 약 7배. 여러 대를 묶을 땐 <button class="t" data-t="nvswitch">NVSwitch</button></td></tr>
+      <tr><td><button class="t" data-t="infiniband">InfiniBand</button> · <button class="t" data-t="roce">RoCE</button></td><td>서버와 서버</td><td>도시 사이 고속 철도</td><td>서버 여러 대를 묶은 클러스터용 고속 네트워크</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="ch" id="s1-4">
+  <div class="ch-head"><span class="ch-num">1.4</span><h2>작동 방식</h2></div>
+  <div class="prose"><ol>
+    <li><b>데이터 전송:</b> CPU가 처리할 데이터를 GPU 메모리, 즉 VRAM으로 복사합니다.</li>
+    <li><b>작업 지시:</b> CPU가 GPU에 특정 연산, 즉 <button class="t" data-t="kernel">커널</button>을 실행하라고 명령합니다.</li>
+    <li><b>동시 병렬 처리:</b> 수천에서 수만 개의 스레드를 32개씩 한 조(<button class="t" data-t="warp">warp</button>)로 묶어, 같은 명령을 동시에 처리합니다. 이 방식을 <button class="t" data-t="simt">SIMT</button>라고 부릅니다.</li>
+    <li><b>기다리는 시간 숨기기:</b> 한 조가 메모리에서 데이터를 기다리는 동안, 다른 조를 먼저 실행해 대기 시간을 숨깁니다.</li>
+    <li><b>결과 반환:</b> 계산이 끝난 결과를 다시 CPU 메모리로 보냅니다.</li>
+  </ol></div>
+</section>
+
+<section class="ch" id="s1-5">
+  <div class="ch-head"><span class="ch-num">1.5</span><h2>이점</h2></div>
+  <div class="prose"><ul>
+    <li><b>병렬 작업에 압도적으로 빠릅니다:</b> 행렬 곱셈이나 컨볼루션처럼 서로 독립적인 계산이 많은 작업에서 CPU보다 수십에서 수백 배 빠릅니다.</li>
+    <li><b>데이터 통로가 넓습니다:</b> H100 SXM의 메모리 대역폭은 초당 약 3.35TB입니다. 1초에 3조 3,500억 바이트를 메모리에서 계산 장치로 실어 나릅니다. 서버 CPU는 초당 수백 GB 수준으로, GPU의 약 7분의 1입니다.</li>
+    <li><b>전력 대비 효율이 높습니다:</b> 병렬 작업 기준으로, 같은 전력으로 CPU보다 더 많은 계산을 합니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-6">
+  <div class="ch-head"><span class="ch-num">1.6</span><h2>부재 시 문제</h2></div>
+  <div class="prose"><ul>
+    <li>대규모 딥러닝 학습을 현실적인 시간 안에 끝낼 수 없습니다. GPT-3급 모델 하나를 학습하는 데 약 3 곱하기 10의 23제곱 번의 연산이 필요합니다.</li>
+    <li>CPU만으로는 학습에 수년에서 수십 년이 걸려, 사실상 대형 AI 모델 자체를 만들 수 없습니다.</li>
+    <li>CPU 서버를 그만큼 늘리면 전력과 발열을 감당할 수 없어, 기존 데이터센터로는 유지하기 어렵습니다.</li>
+    <li>실시간 그래픽과 영상 처리가 어렵고, AI 서비스의 응답도 느려집니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-7">
+  <div class="ch-head"><span class="ch-num">1.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>비싸고 구하기 어렵습니다:</b> H100 한 장이 수천만 원대이고, 수요가 몰려 공급 부족이 반복됩니다.</li>
+    <li><b>전력과 발열이 큽니다:</b> 칩 하나가 H100은 700W, B200은 1,000W 이상을 씁니다. 전력과 냉각 비용이 큽니다.</li>
+    <li><b>순서대로 하는 일에 약합니다:</b> 조건 분기가 많거나 앞 결과에 의존하는 작업은 오히려 CPU보다 느립니다.</li>
+    <li><b>VRAM 용량에 한계가 있습니다:</b> 모델이 VRAM에 다 안 들어가면 여러 GPU로 쪼개야 해서 구성이 복잡해집니다.</li>
+    <li><b>데이터를 옮기는 비용이 있습니다:</b> CPU와 GPU 사이를 PCIe로 오가는 시간이 계산 시간보다 길어지면 이득이 사라집니다.</li>
+    <li><b>혼자 동작하지 못합니다:</b> 항상 CPU가 작업을 지시해야 합니다.</li>
+    <li><b>특정 회사에 묶입니다:</b> AI 생태계가 NVIDIA의 CUDA에 쏠려 있어 다른 제품으로 옮기기 어렵습니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-8">
+  <div class="ch-head"><span class="ch-num">1.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <p class="prose">GPU는 만능이 아니라서, GPU의 단점을 보완하거나 특정 목적에 특화된 칩과 기술이 있습니다.</p>
+  <h3>1. TPU · ASIC · NPU (AI 전용 칩)</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 그래픽 기능을 모두 빼고, AI 연산만 하도록 하드웨어를 고정해서 만든 맞춤형 칩입니다. <button class="t" data-t="asic">ASIC</button>은 특정 용도 전용 칩 전체를 부르는 말이고, <button class="t" data-t="tpu">TPU</button>와 <button class="t" data-t="npu">NPU</button>는 그중 AI용입니다.</li>
+    <li><b>해결하는 단점:</b> 불필요한 회로가 없어 전력 효율이 훨씬 높습니다. 대신 새로운 알고리즘에는 유연하게 대응하기 어렵습니다.</li>
+    <li><b>대표 예시:</b> 구글 TPU, AWS Trainium과 Inferentia, Microsoft Maia, Meta MTIA, Intel Gaudi, Groq LPU, Cerebras WSE, 국산 NPU인 리벨리온 ATOM·REBEL과 퓨리오사 RNGD, 기기 내장형인 Apple Neural Engine과 퀄컴 Hexagon</li>
+  </ul></div>
+  <h3>2. <button class="t" data-t="fpga">FPGA</button></h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 공장에서 나온 뒤에도 사용자가 하드웨어 회로를 다시 설계할 수 있는 칩입니다.</li>
+    <li><b>해결하는 단점:</b> 데이터 흐름을 하드웨어 단계에서 맞춤으로 짤 수 있어 지연 시간이 극도로 짧습니다. 대신 설계가 아주 어렵고, 최고 성능은 GPU나 ASIC보다 낮습니다.</li>
+    <li><b>대표 예시:</b> AMD(Xilinx) Alveo·Versal, Intel(Altera) Agilex, Microsoft Azure Project Brainwave</li>
+  </ul></div>
+  <h3>3. CPU 행렬 확장</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> GPU를 따로 붙이는 대신, CPU 코어 안에 작은 행렬 연산 회로를 넣은 기술입니다. Intel <button class="t" data-t="amx">AMX</button>, ARM SME가 있습니다.</li>
+    <li><b>해결하는 단점:</b> 비싼 GPU 없이 가벼운 AI 추론이나 전처리를 꽤 빠르게 할 수 있습니다. 대규모 학습이나 LLM에는 역부족입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-9">
+  <div class="ch-head"><span class="ch-num">1.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>구분</th><th>GPU</th><th>TPU · AI ASIC</th><th>FPGA</th><th>CPU</th></tr></thead>
+    <tbody>
+      <tr><td>범용성</td><td>높음 (AI·HPC·그래픽)</td><td>낮음 (특정 연산 특화)</td><td>중간 (재구성 가능)</td><td>매우 높음</td></tr>
+      <tr><td>AI 처리량</td><td>매우 높음</td><td>매우 높음 (특화 영역)</td><td>중간</td><td>낮음</td></tr>
+      <tr><td>전력 효율</td><td>중상</td><td>높음</td><td>높음</td><td>낮음</td></tr>
+      <tr><td>개발 난이도</td><td>중간 (CUDA·프레임워크 성숙)</td><td>중간 (전용 SDK 필요)</td><td>매우 높음 (하드웨어 설계)</td><td>낮음</td></tr>
+      <tr><td>대표 예시</td><td>NVIDIA H100·B200, AMD MI300X</td><td>Google TPU, AWS Trainium</td><td>AMD Alveo, Intel Agilex</td><td>Intel Xeon, AMD EPYC</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="ch" id="s1-10">
+  <div class="ch-head"><span class="ch-num">1.10</span><h2>실무 관점</h2></div>
+  <h3>1. GPU 최소 스펙</h3>
+  <div class="prose"><ul>
+    <li><b>CUDA 실습:</b> NVIDIA 그래픽카드가 필요합니다. CUDA 13 기준으로 RTX 20, GTX 16 시리즈 이상입니다.</li>
+    <li><b>내 PC에서 LLM 추론:</b> 필요한 VRAM은 대략 "파라미터 수 곱하기 파라미터당 바이트"에 여유분 20% 정도를 더한 값입니다. 파라미터당 바이트는 FP16과 BF16이 2, INT8이 1, INT4가 0.5입니다.
+      <ul>
+        <li>7B 모델을 FP16으로 돌리면 가중치만 약 14GB라, 16~24GB VRAM이 필요합니다.</li>
+        <li>4비트로 압축하면 약 4GB로 줄어서 6~8GB 게이밍 노트북에서도 돌아갑니다.</li>
+      </ul>
+    </li>
+    <li><b>학습과 파인튜닝:</b> 추론보다 훨씬 많이 필요합니다. 전체 파인튜닝은 파라미터당 약 16바이트라, 7B 모델도 100GB가 넘습니다. LoRA나 QLoRA를 쓰면 GPU 한 장으로도 가능합니다.</li>
+    <li><b>대규모 학습:</b> 개인 PC로는 불가능합니다. 80GB급 GPU 여러 장을 서버 안에서는 NVLink로, 서버 사이는 InfiniBand나 RoCE로 묶은 클러스터가 필요합니다.</li>
+  </ul></div>
+  <h3>2. 세대별 레퍼런스: 대역폭이 성능을 좌우한다</h3>
+  <p class="prose">코어가 아무리 많아도, 데이터를 나르는 컨베이어 벨트인 메모리 대역폭이 느리면 소용없습니다. 특히 LLM 추론은 대역폭이 속도를 정하는 대표적인 작업입니다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>제품</th><th>세대 · 출시</th><th>메모리</th><th>대역폭</th></tr></thead>
+    <tbody>
+      <tr><td>A100</td><td>Ampere · 2020</td><td>HBM2e 80GB</td><td class="num">약 2.0 TB/s</td></tr>
+      <tr><td>H100</td><td>Hopper · 2022</td><td>HBM3 80GB</td><td class="num">3.35 TB/s</td></tr>
+      <tr><td>H200</td><td>Hopper · 2024</td><td>HBM3e 141GB</td><td class="num">4.8 TB/s</td></tr>
+      <tr><td>B200</td><td>Blackwell · 2024~25</td><td>HBM3e 192GB</td><td class="num">8 TB/s</td></tr>
+      <tr><td>Rubin</td><td>Rubin · 2026</td><td>HBM4 288GB</td><td class="num">22 TB/s (CES 2026 발표)</td></tr>
+    </tbody>
+  </table></div>
+  <h3>3. 최근 업계 트렌드</h3>
+  <div class="prose"><ol>
+    <li><b>차세대 플랫폼 베라 루빈:</b> Vera CPU와 Rubin GPU 조합으로, 2026년 하반기부터 양산 출하됩니다.</li>
+    <li><b>HBM 경쟁:</b> HBM4 공급을 먼저 확보하려는 SK하이닉스, 삼성 등의 경쟁이 치열합니다.</li>
+    <li><b>액체 냉각 전환:</b> GPU 한 장이 1,000W를 넘고 랙 하나가 100kW 이상을 쓰면서, 공랭에서 수랭으로 바뀌고 있습니다.</li>
+    <li><b>미국의 수출 통제:</b> 대중국 AI 칩 규제가 공급망의 주요 변수로 계속 작용하고 있습니다.</li>
+  </ol></div>
+</section>
+
+<!-- ============ PART 2 : GPGPU ============ -->
+<div class="part" id="p2">
+  <div class="pk">PART 2</div>
+  <h2>GPGPU (General-Purpose computing on GPU)</h2>
+  <p>여기까지가 GPU라는 칩이었습니다. 이제 그 칩을 그래픽이 아닌 일반 계산에 쓰자는 생각, GPGPU로 넘어가겠습니다.</p>
+</div>
+
+<section class="ch" id="s2-1">
+  <div class="ch-head"><span class="ch-num">2.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="gpgpu">GPGPU</button>는 그래픽 전용이던 GPU를 <b>과학 계산, AI, 데이터 처리 같은 범용 계산에 활용하는 방식</b>입니다.</p>
+  <div class="prose"><ul>
+    <li>특정 제품이나 칩 이름이 아니라, "GPU를 계산기로도 쓰자"는 개념입니다.</li>
+    <li>GPU의 수천 개 코어를 그림 그리기 대신 대량의 숫자 계산에 투입하는 것이 핵심입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-2">
+  <div class="ch-head"><span class="ch-num">2.2</span><h2>등장 배경</h2></div>
+  <div class="prose">
+    <p>2000년대 초, 연구자들은 GPU의 병렬 계산 능력을 그래픽에만 쓰기엔 아깝다는 걸 깨달았습니다. 하지만 당시 GPU는 그림 그리기 명령만 알아들었습니다.</p>
+    <ol>
+      <li><b>위장 계산 (2001년경):</b> 데이터를 그림으로, 계산을 색칠로 위장해서 GPU에 계산을 시켰습니다. 그래픽 지식이 필수였고 제약도 많았습니다.</li>
+      <li><b>개념과 도구 마련 (2002~2004년):</b> Mark Harris가 GPGPU라는 용어를 제안했고, BrookGPU가 나왔습니다. BrookGPU를 만든 Ian Buck은 이후 CUDA 개발을 이끌었습니다.</li>
+      <li><b>정식 지원 (2006~2009년):</b> G80 칩과 함께 CUDA가, 이어서 OpenCL이 나왔습니다. 이제 위장할 필요 없이 C나 C++로 GPU에 직접 계산을 시킬 수 있게 됐습니다.</li>
+      <li><b>AI 대중화 (2012년):</b> AlexNet이 GTX 580 두 장으로 학습해 이미지 인식 대회에서 우승했습니다. 이를 계기로 딥러닝과 GPGPU가 본격적으로 손을 잡았습니다.</li>
+    </ol>
+  </div>
+  <div class="callout idea">
+    <span class="say">"그림인 척 속이지 말고, 처음부터 계산기로 쓰게 하자!"</span>
+    그렇게 자리 잡은 개념이 바로 <b>GPGPU</b>입니다.
+  </div>
+</section>
+
+<section class="ch" id="s2-3">
+  <div class="ch-head"><span class="ch-num">2.3</span><h2>구조</h2></div>
+  <h3>1. 이종 컴퓨팅</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 성격이 다른 두 칩이 역할을 나눠 함께 일하는 방식, 즉 <button class="t" data-t="hetero">이종 컴퓨팅</button>입니다.</li>
+    <li><b>CPU, 즉 호스트:</b> 전체 흐름을 관리하고 순서대로 해야 하는 일을 맡습니다.</li>
+    <li><b>GPU, 즉 디바이스:</b> 똑같은 일을 대량으로 나눠 동시에 처리합니다.</li>
+    <li><b>메모리도 따로입니다:</b> CPU는 시스템 메모리를, GPU는 VRAM을 쓰기 때문에 둘 사이에 PCIe를 통한 복사가 필요합니다. 통합 메모리 구조는 예외이고, 2.8에서 봅니다.</li>
+  </ul></div>
+  <h3>2. 소프트웨어 계층</h3>
+  <p class="prose">명령은 위에서 아래로 내려가고, 아래로 갈수록 하드웨어에 가까워집니다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>계층</th><th>예시</th></tr></thead>
+    <tbody>
+      <tr><td>1. 애플리케이션</td><td>LLM 학습·추론 코드</td></tr>
+      <tr><td>2. 프레임워크</td><td>PyTorch, TensorFlow, JAX</td></tr>
+      <tr><td>3. 가속 라이브러리</td><td><button class="t" data-t="cublas">cuBLAS</button>, <button class="t" data-t="cudnn">cuDNN</button>, <button class="t" data-t="nccl">NCCL</button> / rocBLAS, MIOpen</td></tr>
+      <tr><td>4. 프로그래밍 모델</td><td><button class="t" data-t="cuda">CUDA</button>, <button class="t" data-t="opencl">OpenCL</button>, HIP</td></tr>
+      <tr><td>5. 드라이버</td><td>NVIDIA Driver, AMD amdgpu (소프트웨어 중 하드웨어에 가장 가까움)</td></tr>
+      <tr><td>6. GPU 하드웨어</td><td>H100, RTX 4090 등 실제 칩</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="ch" id="s2-4">
+  <div class="ch-head"><span class="ch-num">2.4</span><h2>작동 방식</h2></div>
+  <div class="prose"><ol>
+    <li><b>무거운 부분만 넘기기:</b> 프로그램 전체를 GPU로 옮기지 않습니다. 나눠서 처리할 수 있는 무거운 부분만 GPU에 넘기고, 나머지는 CPU가 처리합니다. 이걸 <button class="t" data-t="offload">오프로딩</button>이라고 합니다.</li>
+    <li><b>같은 계산을 여러 데이터에:</b> 같은 연산을 서로 다른 데이터 수천 개에 동시에 적용합니다. 예를 들어 100만 칸짜리 벡터 두 개를 더할 때, 작업자 100만 명이 한 칸씩 맡아 더합니다.</li>
+    <li><b>전체 흐름:</b> CPU에서 GPU로 데이터를 복사하고, 커널을 실행하고, 결과를 다시 CPU로 복사합니다. 1.4의 작동 방식과 같습니다.</li>
+  </ol></div>
+</section>
+
+<section class="ch" id="s2-5">
+  <div class="ch-head"><span class="ch-num">2.5</span><h2>이점</h2></div>
+  <div class="prose"><ul>
+    <li><b>슈퍼컴퓨터급 연산을 저렴하게:</b> 이미 있던 그래픽 하드웨어를 재활용해 큰 계산 능력을 확보할 수 있습니다.</li>
+    <li><b>쓰임새가 넓습니다:</b> 딥러닝, 영상 처리처럼 같은 계산을 대량으로 반복하는 거의 모든 분야에 쓰입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-6">
+  <div class="ch-head"><span class="ch-num">2.6</span><h2>부재 시 문제</h2></div>
+  <div class="prose"><ul>
+    <li>딥러닝 혁명이 크게 늦어졌을 겁니다. GPU 없이는 AlexNet 이후 모델을 계속 키우기 어려웠습니다.</li>
+    <li>슈퍼컴퓨터를 CPU만으로 만들어야 해서 전력과 비용 효율이 크게 떨어집니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-7">
+  <div class="ch-head"><span class="ch-num">2.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>나눌 수 있는 일에만 효과적입니다:</b> GPU로 빠르게 만들 수 없는 순차 부분이 전체 속도의 상한을 정합니다. 이걸 <button class="t" data-t="amdahl">암달의 법칙</button>이라고 합니다. 예를 들어 전체의 90%를 100배 빠르게 해도, 전체 속도는 약 9.2배에 그칩니다.</li>
+    <li><b>데이터 전송 비용과 VRAM 용량 제약이 있습니다.</b></li>
+    <li><b>회사마다 프로그래밍 방식이 달라 파편화돼 있습니다.</b></li>
+    <li><b>소비자용 GPU는 FP64 성능이 낮습니다:</b> 정밀한 과학 계산에는 제약이 있습니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-8">
+  <div class="ch-head"><span class="ch-num">2.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. 표준과 이식성</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 한 번 짠 코드를 여러 회사 GPU에서 돌릴 수 있게 하는 표준입니다. OpenCL, <button class="t" data-t="sycl">SYCL</button>과 oneAPI, Vulkan Compute, WebGPU가 있습니다.</li>
+    <li><b>해결하는 단점:</b> 회사마다 방식이 달라 파편화된 문제를 줄입니다.</li>
+  </ul></div>
+  <h3>2. 회사별 전용 도구</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 각 GPU 제조사가 자사 하드웨어에 맞춰 최적화한 도구입니다. AMD의 <button class="t" data-t="rocm">ROCm과 HIP</button>, Apple의 Metal이 있습니다.</li>
+    <li><b>해결하는 단점:</b> CUDA가 없는 하드웨어에서도 최고 성능을 끌어낼 수 있습니다.</li>
+  </ul></div>
+  <h3>3. 통합 메모리</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> CPU와 GPU가 메모리를 함께 쓰거나 한 칩에 합쳐, 데이터를 주고받는 비용 자체를 줄이는 기술입니다.</li>
+    <li><b>CUDA Unified Memory:</b> 소프트웨어가 두 메모리를 하나의 주소처럼 보이게 하고 필요할 때 자동으로 옮겨 줍니다. 복사 코드는 줄지만 실제 이동은 여전히 일어납니다.</li>
+    <li><b>Grace Hopper, Grace Blackwell:</b> CPU와 GPU를 NVLink-C2C(초당 900GB)로 붙여 서로의 메모리를 직접 읽습니다.</li>
+    <li><b>AMD MI300A, Apple M 시리즈:</b> CPU와 GPU가 한 패키지에서 같은 메모리를 물리적으로 공유합니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-9">
+  <div class="ch-head"><span class="ch-num">2.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>프로그래밍 모델</th><th>지원 하드웨어</th><th>성능</th><th>생태계</th><th>특징</th></tr></thead>
+    <tbody>
+      <tr><td>CUDA</td><td>NVIDIA 전용</td><td>최상</td><td>가장 큼</td><td>사실상 표준</td></tr>
+      <tr><td>ROCm/HIP</td><td>AMD (HIP은 NVIDIA도)</td><td>상</td><td>성장 중</td><td>CUDA와 문법 유사, hipify로 변환</td></tr>
+      <tr><td>OpenCL</td><td>거의 모든 회사</td><td>중</td><td>정체</td><td>이식성 좋지만 최신 기능 반영이 느림</td></tr>
+      <tr><td>SYCL/oneAPI</td><td>Intel·NVIDIA·AMD</td><td>중상</td><td>중</td><td>표준 C++ 기반 단일 소스</td></tr>
+      <tr><td>Metal</td><td>Apple</td><td>상 (Apple 기기)</td><td>Apple 한정</td><td>Mac 로컬 AI 추론</td></tr>
+      <tr><td>Vulkan Compute · WebGPU</td><td>거의 모든 회사 (WebGPU는 브라우저)</td><td>중</td><td>성장 중</td><td>모바일·웹 AI 추론</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="ch" id="s2-10">
+  <div class="ch-head"><span class="ch-num">2.10</span><h2>실무 관점</h2></div>
+  <h3>1. 최소 스펙</h3>
+  <div class="prose"><ul>
+    <li><b>필수 구성:</b> 범용 연산을 지원하는 GPU, 드라이버, 그리고 CUDA·ROCm·OpenCL 중 하나의 런타임입니다.</li>
+    <li><b>실습 환경:</b> 노트북 내장 GPU로도 OpenCL이나 Metal은 체험할 수 있습니다. AI 실습은 NVIDIA GPU나 Colab 같은 클라우드가 편합니다.</li>
+  </ul></div>
+  <h3>2. 실제 레퍼런스</h3>
+  <div class="prose"><ul>
+    <li><b>AlexNet (2012):</b> GPU 두 장으로 ImageNet 대회에서 우승하며 딥러닝 붐의 출발점이 됐습니다.</li>
+    <li><b>Folding@home:</b> 여러 사람의 GPU를 모아 단백질 접힘을 시뮬레이션하는 분산 GPGPU 프로젝트입니다.</li>
+    <li><b>TOP500 슈퍼컴퓨터:</b> 상위권 대부분이 GPU 가속 시스템입니다. El Capitan과 Frontier는 AMD, Aurora는 Intel, JUPITER 등 다수는 NVIDIA입니다.</li>
+  </ul></div>
+  <h3>3. 최근 이슈</h3>
+  <div class="prose"><ol>
+    <li><b>AMD의 추격:</b> MI350·MI400 계열과 ROCm 7, 대형 고객과의 공급 계약으로 CUDA 대안 생태계가 커지고 있습니다.</li>
+    <li><b>소버린 AI와 국산 NPU:</b> 국가 단위 GPU 클러스터 구축과 함께 리벨리온, 퓨리오사 같은 국산 NPU 도입이 시도되고 있습니다.</li>
+    <li><b>통합 메모리 칩:</b> Grace Blackwell, MI300A처럼 CPU와 GPU 메모리를 합쳐 전송 병목을 줄이는 흐름입니다.</li>
+  </ol></div>
+</section>
+
+<!-- ============ PART 3 : CUDA ============ -->
+<div class="part" id="p3">
+  <div class="pk">PART 3</div>
+  <h2>CUDA (Compute Unified Device Architecture)</h2>
+  <p>GPGPU가 생각이었다면, 이제 그 생각을 NVIDIA GPU에서 실제로 쓸 수 있게 만든 플랫폼, CUDA를 보겠습니다.</p>
+</div>
+
+<section class="ch" id="s3-1">
+  <div class="ch-head"><span class="ch-num">3.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="cuda">CUDA</button>는 <b>NVIDIA GPU에 일을 시키기 위한 공식 언어 확장이자 도구 세트</b>입니다. 2006년에 발표되고 2007년에 출시됐습니다.</p>
+  <div class="prose"><ul>
+    <li>새로운 언어라기보다, C와 C++에 GPU용 문법을 덧붙인 확장입니다.</li>
+    <li>컴파일러인 <button class="t" data-t="nvcc">nvcc</button>, 런타임, 라이브러리, 디버깅과 성능 분석 도구(Nsight)를 묶어 <button class="t" data-t="toolkit">CUDA Toolkit</button>으로 배포합니다.</li>
+    <li>GPGPU가 개념이라면, CUDA는 그 개념을 NVIDIA GPU에서 구현한 플랫폼입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-2">
+  <div class="ch-head"><span class="ch-num">3.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li>GPGPU 초기의 "그림인 척하는 꼼수"는 그래픽 지식이 필수였고, 어렵고 제약도 많았습니다.</li>
+    <li>GPU의 계산 능력을 쓰고 싶은 개발자는 많았지만, 그래픽까지 공부해야 하는 진입 장벽이 너무 높았습니다.</li>
+  </ul></div>
+  <div class="callout idea">
+    <span class="say">"그래픽을 몰라도 일반 C 개발자가 GPU를 쓸 수 있게 하자!"</span>
+    그래서 등장한 것이 바로 <b>CUDA</b>입니다.
+    <ul>
+      <li>소프트웨어만 만든 게 아니라, 범용 계산을 고려한 하드웨어(G80)까지 함께 설계했습니다.</li>
+      <li>이 선택이 NVIDIA가 GPU 컴퓨팅 시장에서 앞서 나가게 된 출발점입니다.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="ch" id="s3-3">
+  <div class="ch-head"><span class="ch-num">3.3</span><h2>구조</h2></div>
+  <h3>1. 소프트웨어 스택</h3>
+  <div class="prose">
+    <p>아래에서부터 GPU 하드웨어, 드라이버, CUDA Driver API, CUDA Runtime API, 라이브러리, 프레임워크 순서로 쌓입니다.</p>
+    <p>PyTorch에서 <code>tensor.to("cuda")</code> 한 줄만 써도, 그 아래에서는 이 계층 전체가 움직입니다.</p>
+  </div>
+  <h3>2. 컴파일 흐름: 두 종류의 설명서</h3>
+  <div class="prose">
+    <p>CUDA 코드 파일은 nvcc를 거쳐 <button class="t" data-t="ptx">PTX</button>가 되고, 다시 <button class="t" data-t="sass">SASS</button>로 바뀌어 실행 파일에 담깁니다. nvcc는 CPU용 코드는 일반 컴파일러에 넘기고, GPU용 코드만 직접 컴파일합니다.</p>
+    <ul>
+      <li><b>PTX, 즉 가상 명령어:</b> 현장에서 번역해 쓰는 원본 설명서입니다. GPU 세대와 상관없이 쓸 수 있어서, 새 GPU에서도 드라이버가 그 자리에서 번역해 줍니다.</li>
+      <li><b>SASS, 즉 실제 기계어:</b> 특정 기계 전용 설명서입니다. 특정 GPU 세대만 알아듣습니다.</li>
+      <li>실행 파일에는 여러 세대용 SASS와 PTX를 함께 넣을 수 있습니다. 맞는 SASS가 없으면 드라이버가 PTX를 번역합니다.</li>
+    </ul>
+  </div>
+  <h3>3. Compute Capability</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> GPU 세대별 기능 버전 번호, 즉 <button class="t" data-t="cc">Compute Capability</button>입니다. 숫자가 높을수록 새 기능을 지원합니다.</li>
+    <li><b>주의:</b> CUDA 버전(13.x)과 Compute Capability(9.0 등)는 서로 다른 번호입니다. Toolkit마다 지원하는 범위가 정해져 있습니다.</li>
+  </ul></div>
+  <div class="tbl"><table>
+    <thead><tr><th>CC</th><th>세대</th><th>대표 제품</th></tr></thead>
+    <tbody>
+      <tr><td>7.0</td><td>Volta</td><td>V100</td></tr>
+      <tr><td>7.5</td><td>Turing</td><td>RTX 20</td></tr>
+      <tr><td>8.0 / 8.6</td><td>Ampere</td><td>A100 / RTX 30</td></tr>
+      <tr><td>8.9</td><td>Ada</td><td>RTX 40</td></tr>
+      <tr><td>9.0</td><td>Hopper</td><td>H100</td></tr>
+      <tr><td>10.0 / 12.0</td><td>Blackwell</td><td>B200 / RTX 50</td></tr>
+    </tbody>
+  </table></div>
+  <h3>4. 프로그래밍 단위</h3>
+  <p class="prose">Grid, Block, Thread, 그리고 Warp로 일을 나눕니다. 자세한 구조는 3회차에서 다룹니다.</p>
+</section>
+
+<section class="ch" id="s3-4">
+  <div class="ch-head"><span class="ch-num">3.4</span><h2>작동 방식</h2></div>
+  <p class="prose">100만 칸짜리 배열 두 개를 더하는 코드입니다. for문으로 100만 번 반복하는 대신, 작업자 100만 명을 띄워 각자 한 칸씩 처리합니다.</p>
+<pre><code>__global__ void add(const float* a, const float* b, float* c, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x; // 스레드마다 고유 번호
+    if (i &lt; n) c[i] = a[i] + b[i];                  // 범위 밖 스레드는 쉼
+}
+
+// host (h_a, h_b, h_c는 CPU 메모리에 준비된 배열)
+int n = 1 &lt;&lt; 20;                                     // 약 100만 개
+size_t bytes = n * sizeof(float);
+float *d_a, *d_b, *d_c;
+cudaMalloc(&amp;d_a, bytes); cudaMalloc(&amp;d_b, bytes); cudaMalloc(&amp;d_c, bytes);
+cudaMemcpy(d_a, h_a, bytes, cudaMemcpyHostToDevice); // CPU → GPU 복사
+cudaMemcpy(d_b, h_b, bytes, cudaMemcpyHostToDevice);
+add&lt;&lt;&lt;(n + 255) / 256, 256&gt;&gt;&gt;(d_a, d_b, d_c, n);    // 커널 실행
+cudaMemcpy(h_c, d_c, bytes, cudaMemcpyDeviceToHost); // GPU → CPU 복사
+cudaFree(d_a); cudaFree(d_b); cudaFree(d_c);</code></pre>
+  <details>
+    <summary>코드 한 줄씩 읽기</summary>
+    <div class="prose"><ol>
+      <li><code>__global__</code>: GPU에서 실행되는 함수, 즉 커널이라는 표시입니다. 여기에는 작업자 한 명이 할 일을 적습니다.</li>
+      <li><code>blockIdx.x * blockDim.x + threadIdx.x</code>: "나는 몇 번 작업자인가"를 계산합니다. 각자 자기 번호의 칸 하나만 처리합니다.</li>
+      <li><code>if (i &lt; n)</code>: 작업자 수가 256의 배수로 올림돼서 데이터보다 많을 수 있으니, 범위를 넘는 작업자는 쉬게 합니다.</li>
+      <li><code>&lt;&lt;&lt;grid, block&gt;&gt;&gt;</code>: 작업자를 몇 명 띄울지 정합니다. 256명씩 한 조로 묶고, 조는 필요한 만큼 만듭니다.</li>
+      <li>커널 실행은 비동기입니다. CPU는 지시만 하고 바로 다음 줄로 넘어가고, 이어지는 복사 명령이 커널이 끝날 때까지 기다려 줍니다.</li>
+    </ol></div>
+  </details>
+  <div class="prose"><ul>
+    <li>전체 흐름은 1.4의 다섯 단계와 같습니다. 복사하고, 실행하고, 결과를 다시 복사합니다.</li>
+    <li>실무에서는 커널을 직접 짜기보다, PyTorch가 내부에서 cuBLAS와 cuDNN의 커널을 불러 줍니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-5">
+  <div class="ch-head"><span class="ch-num">3.5</span><h2>이점</h2></div>
+  <div class="prose"><ul>
+    <li><b>생태계:</b> 2007년부터 20년 가까이 쌓여, 거의 모든 AI 프레임워크와 논문 코드가 CUDA 기준으로 작성됩니다.</li>
+    <li><b>완성도:</b> 고도로 최적화된 라이브러리, 디버깅과 성능 분석 도구, 방대한 자료가 있습니다.</li>
+    <li><b>호환성:</b> PTX 덕분에 구형과 신형 GPU 사이에서 코드가 그대로 이어집니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-6">
+  <div class="ch-head"><span class="ch-num">3.6</span><h2>부재 시 문제</h2></div>
+  <div class="prose"><ul>
+    <li>PyTorch 같은 프레임워크가 GPU를 쓰는 부분을 다른 방식으로 다시 짜고, 다시 최적화해야 합니다.</li>
+    <li>vLLM, FlashAttention 등 대부분의 오픈소스 AI 코드가 바로 돌아가지 않습니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-7">
+  <div class="ch-head"><span class="ch-num">3.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>특정 회사에 묶입니다:</b> NVIDIA GPU에서만 동작합니다. 라이선스상 번역 레이어로 다른 회사 하드웨어에서 돌리는 것도 제한됩니다.</li>
+    <li><b>버전 맞추기가 어렵습니다:</b> 드라이버, CUDA Toolkit, cuDNN, PyTorch 버전이 서로 맞아야 합니다. 실무 장애 1순위입니다.</li>
+    <li><b>최적화가 어렵습니다:</b> 성능을 끝까지 끌어내려면 메모리 계층과 warp 동작을 이해해야 합니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>드라이버가 지원하는 CUDA 버전이 컨테이너나 Toolkit의 CUDA 버전보다 같거나 높으면 정상입니다.</b> 반대면 "CUDA driver version is insufficient" 같은 오류가 납니다.
+    <ul>
+      <li><code>nvidia-smi</code>에 나오는 CUDA 버전은 드라이버가 지원하는 최대 버전이고, <code>nvcc --version</code>은 설치된 Toolkit 버전입니다.</li>
+      <li>CUDA 11부터는 같은 메이저 버전 안에서 드라이버가 조금 낮아도 대부분 동작합니다. 다만 일부 새 기능은 제한됩니다.</li>
+      <li>PyTorch를 pip나 conda로 설치하면 필요한 CUDA 런타임과 cuDNN이 함께 들어 있어서, PyTorch만 쓸 때는 Toolkit을 따로 설치하지 않아도 됩니다. 드라이버 버전만 맞으면 됩니다.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="ch" id="s3-8">
+  <div class="ch-head"><span class="ch-num">3.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. ROCm · HIP (AMD)</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> AMD가 만든 CUDA 대응 플랫폼으로, CUDA와 거의 일대일로 대응합니다.</li>
+    <li><b>해결하는 단점:</b> hipify 도구로 기존 CUDA 코드를 HIP 코드로 바꿀 수 있어, NVIDIA 밖으로 옮기기 쉬워집니다.</li>
+  </ul></div>
+  <h3>2. <button class="t" data-t="triton">Triton</button> (OpenAI)</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> Python으로 GPU 커널을 작성할 수 있게 해 주는 언어이자 컴파일러입니다.</li>
+    <li><b>해결하는 단점:</b> NVIDIA와 AMD를 모두 지원하고, 최적화 난이도도 낮춰 줍니다. PyTorch 2의 <code>torch.compile</code> 기본 백엔드로 쓰입니다.</li>
+  </ul></div>
+  <h3>3. 하드웨어 중립 스택</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 하드웨어 차이를 감춰서 어느 회사 칩에서든 돌아가게 하는 언어와 컴파일러입니다. oneAPI와 SYCL, OpenCL, Mojo, JAX와 XLA가 있습니다.</li>
+    <li><b>해결하는 단점:</b> 한 회사에 묶이는 문제를 줄입니다.</li>
+  </ul></div>
+  <h3>4. <button class="t" data-t="zluda">ZLUDA</button></h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> CUDA로 만든 프로그램을 다른 회사 GPU, 주로 AMD에서 돌리는 호환 레이어입니다. 실험적인 오픈소스입니다.</li>
+    <li><b>주의:</b> 3.7의 라이선스 제한과 충돌할 수 있어 상업 환경에서는 쓰기 어렵습니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">그런데도 CUDA를 못 벗어나는 이유</span>문제는 하드웨어가 아니라 <b>생태계</b>입니다. 다른 플랫폼으로 옮기면 돌아가기는 하지만, 같은 성능을 내려면 다시 최적화해야 합니다.</div>
+</section>
+
+<section class="ch" id="s3-9">
+  <div class="ch-head"><span class="ch-num">3.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>항목</th><th>CUDA</th><th>ROCm/HIP</th><th>Triton</th><th>OpenCL</th></tr></thead>
+    <tbody>
+      <tr><td>하드웨어</td><td>NVIDIA</td><td>AMD (+NVIDIA)</td><td>NVIDIA·AMD·일부 기타</td><td>여러 회사</td></tr>
+      <tr><td>언어</td><td>C/C++ (Python 바인딩)</td><td>C/C++</td><td>Python</td><td>C 기반</td></tr>
+      <tr><td>추상화 수준</td><td>저수준 (스레드 단위)</td><td>저수준</td><td>블록(타일) 단위</td><td>저수준</td></tr>
+      <tr><td>성능 상한</td><td>최상</td><td>상</td><td>상 (튜닝 쉬움)</td><td>중</td></tr>
+      <tr><td>생태계</td><td>압도적</td><td>성장 중</td><td>AI 커널 중심 급성장</td><td>정체</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="ch" id="s3-10">
+  <div class="ch-head"><span class="ch-num">3.10</span><h2>실무 관점</h2></div>
+  <h3>1. 최소 스펙</h3>
+  <div class="prose"><ul>
+    <li><b>필수 구성:</b> NVIDIA GPU, NVIDIA 드라이버, CUDA Toolkit입니다. Linux와 Windows를 지원하고, macOS는 지원하지 않습니다. Windows on Arm64는 13.4부터 지원합니다.</li>
+    <li><b>CUDA 13.x 기준:</b> Turing(CC 7.5) 이상을 지원합니다. Maxwell, Pascal, Volta는 12.x까지입니다. Linux 드라이버는 R580 이상이 필요합니다.</li>
+  </ul></div>
+  <div class="tbl"><table>
+    <thead><tr><th>확인 명령</th><th>알 수 있는 것</th></tr></thead>
+    <tbody>
+      <tr><td><code>nvidia-smi</code></td><td>드라이버 버전과 지원하는 최대 CUDA 버전</td></tr>
+      <tr><td><code>nvcc --version</code></td><td>설치된 Toolkit 버전</td></tr>
+      <tr><td><code>python -c "import torch; print(torch.cuda.is_available())"</code></td><td>PyTorch에서 GPU를 인식하는지</td></tr>
+    </tbody>
+  </table></div>
+  <h3>2. 실제 레퍼런스</h3>
+  <div class="prose"><ul>
+    <li><b>PyTorch:</b> <code>torch.cuda</code>, <code>tensor.to("cuda")</code></li>
+    <li><b>컨테이너와 쿠버네티스:</b> NVIDIA Container Toolkit으로 Docker 안에서 GPU를 쓰고, GPU Operator와 Device Plugin으로 쿠버네티스에서 <code>nvidia.com/gpu</code> 리소스를 스케줄링합니다.</li>
+    <li><b>대표 라이브러리:</b> 행렬 연산의 cuBLAS, 딥러닝 알고리즘의 cuDNN, GPU 간 통신의 NCCL, 추론 최적화 엔진인 <button class="t" data-t="tensorrt">TensorRT</button>가 있습니다.</li>
+  </ul></div>
+  <h3>3. 최근 이슈</h3>
+  <div class="prose"><ol>
+    <li><b>CUDA 13 세대:</b> 13.0(2025년 8월)에서 구형 아키텍처 지원을 정리했고, 13.1부터 타일 기반 프로그래밍 모델인 CUDA Tile과 cuTile Python을 도입했습니다. Triton과 비슷한 상위 추상화를 공식 지원하는 셈입니다.</li>
+    <li><b>CUDA 13.4 (2026년 9월):</b> Windows on Arm64 네이티브 지원, Rubin 아키텍처 프리뷰 지원, MPS V3가 들어갔습니다.</li>
+    <li><b>탈 CUDA 흐름:</b> Triton, JAX, Mojo 같은 하드웨어 중립 스택과 AMD ROCm의 성장으로, CUDA의 해자가 약해지는지가 업계의 주요 논쟁입니다.</li>
+  </ol></div>
+</section>
+
+<section class="ch" id="refs">
+  <div class="ch-head"><span class="ch-num">+</span><h2>참고</h2></div>
+  <ul>
+    <li><a href="https://docs.nvidia.com/cuda/cuda-c-programming-guide/">NVIDIA CUDA C++ Programming Guide</a></li>
+    <li><a href="https://resources.nvidia.com/en-us-tensor-core">NVIDIA H100 Tensor Core GPU Architecture</a></li>
+    <li><a href="https://developer.nvidia.com/blog/inside-the-nvidia-rubin-platform-six-new-chips-one-ai-supercomputer/">Inside the NVIDIA Rubin Platform</a></li>
+    <li><a href="https://docs.nvidia.com/cuda/archive/13.4.1/cuda-toolkit-release-notes/index.html">CUDA Toolkit 13.4 Release Notes</a></li>
+    <li><a href="https://docs.nvidia.com/deploy/cuda-compatibility/">CUDA Compatibility Guide</a></li>
+  </ul>
+</section>
+
+<nav class="pager" id="pager" data-no="1" aria-label="회차 이동"></nav>
+</main>
+</div>
+
+<footer class="site"><div class="container">자료의 오류나 보충할 내용은 <a href="https://github.com/designerbohyun/domain-study/issues">GitHub 이슈</a>로 알려 주세요.</div></footer>
+<script src="../assets/terms.js"></script>
+<script src="../assets/sessions.js"></script>
+<script src="../assets/site.js"></script>
+</body>
+</html>

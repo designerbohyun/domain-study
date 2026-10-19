@@ -1,0 +1,26 @@
+// 스터디 목차. 회차 자료를 올리면 해당 줄의 page에 경로를 적는다.
+window.SESSIONS = [
+  { no: 1,  track: "GPU 기본 구조",      topics: "GPU, GPGPU, CUDA", meet: "2026-10-13", page: "sessions/01.html" },
+  { no: 2,  track: "GPU 기본 구조",      topics: "SM, CUDA Core, Tensor Core, Occupancy", meet: "2026-10-15", page: "sessions/02.html" },
+  { no: 3,  track: "GPU 기본 구조",      topics: "Kernel, Thread, Block, Grid, Warp", meet: "2026-10-20" },
+  { no: 4,  track: "GPU 기본 구조",      topics: "FP32, FP16, BF16, FP8, INT8", meet: "2026-10-22" },
+  { no: 5,  track: "GPU 메모리",         topics: "HBM, VRAM, Global·Shared Memory, Register, L1·L2 Cache", meet: "2026-10-27" },
+  { no: 6,  track: "GPU 메모리",         topics: "Bandwidth, Latency, Coalesced Access, Unified·Pinned Memory", meet: "2026-10-29" },
+  { no: 7,  track: "CPU-GPU 연결",       topics: "PCIe, Lane, Gen4·5·6, Host Memory", meet: "2026-11-03" },
+  { no: 8,  track: "CPU-GPU 연결",       topics: "NUMA, DMA, BAR, CPU Bottleneck", meet: "2026-11-05" },
+  { no: 9,  track: "GPU 간 통신",        topics: "NVLink, NVSwitch, P2P, GPUDirect 계열", meet: "2026-11-10" },
+  { no: 10, track: "GPU 간 통신",        topics: "NCCL, AllReduce, AllGather, ReduceScatter", meet: "2026-11-12" },
+  { no: 11, track: "서버 간 통신",       topics: "InfiniBand, Ethernet, RoCE, RDMA, NIC, HCA", meet: "2026-11-17" },
+  { no: 12, track: "서버 간 통신",       topics: "Topology, Fat-tree, Leaf-Spine", meet: "2026-11-19" },
+  { no: 13, track: "Kubernetes GPU 운영", topics: "Device Plugin, GPU Operator, DCGM Exporter", meet: "2026-11-24" },
+  { no: 14, track: "Kubernetes GPU 운영", topics: "MIG, MPS, Time-slicing, HAMi", meet: "2026-11-26" },
+  { no: 15, track: "Kubernetes GPU 운영", topics: "Scheduler, Volcano, Kueue", meet: "2026-12-01" },
+  { no: 16, track: "Kubernetes GPU 운영", topics: "ResourceQuota, LimitRange, Taint, Affinity", meet: "2026-12-03" },
+  { no: 17, track: "AI 학습",            topics: "Distributed Training, Data·Tensor·Pipeline Parallelism", meet: "2026-12-08" },
+  { no: 18, track: "AI 학습",            topics: "ZeRO, FSDP, DeepSpeed, Megatron-LM", meet: "2026-12-10" },
+  { no: 19, track: "AI 학습",            topics: "Checkpointing, Batch Size, Communication Overhead", meet: "2026-12-15" },
+  { no: 20, track: "LLM 추론",           topics: "vLLM, TensorRT-LLM, Triton, KV Cache, PagedAttention, Continuous Batching", meet: "2026-12-17" },
+  { no: 21, track: "LLM 추론",           topics: "Prefill, Decode, TTFT, TPOT, Quantization", meet: "2026-12-22" },
+  { no: 22, track: "모니터링 운영",       topics: "Utilization 지표, Power, Temperature, PCIe·NVLink Throughput", meet: "2026-12-24" },
+  { no: 23, track: "모니터링 운영",       topics: "ECC·XID Error, DCGM, NVML, Prometheus, Grafana", meet: "2026-12-29" }
+];

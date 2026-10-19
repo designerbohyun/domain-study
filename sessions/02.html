@@ -21,7 +21,7 @@
 <header class="doc-head">
   <div class="crumb"><a href="../">스터디 목차</a> / GPU 기본 구조 / 2회차</div>
   <h1>2회차 · SM, CUDA Core, Tensor Core, Occupancy</h1>
-  <p>지난 1회차에서는 GPU를 회사에 비유했습니다. GPU가 회사라면 GPC는 본부, TPC는 부서, SM은 팀, 코어는 팀원이었습니다. 오늘은 그중에서 실제로 일을 하는 팀, 즉 SM 안으로 들어가 보겠습니다. 이어서 그 팀의 일반 팀원인 CUDA Core와, AI 계산을 도맡는 Tensor Core를 차례로 봅니다. 마지막으로 팀을 얼마나 꽉 채워 쓰고 있는지 재는 Occupancy까지 살펴보겠습니다.</p><p>진행 순서는 1회차와 같습니다. 주제마다 아래 열 가지를 차례대로 짚습니다. 기준 제품은 1회차와 마찬가지로 NVIDIA <button class="t" data-t="h100">H100</button>입니다.</p>
+  <p>지난 1회차에서는 GPU 칩이 GPC, TPC, SM 순서로 쌓여 있다는 것을 봤습니다. 오늘은 그중 실제로 계산을 하는 SM 안으로 들어가 보겠습니다. 이어서 SM 안의 계산 유닛인 CUDA Core와 Tensor Core를 차례로 봅니다. 마지막으로 SM을 얼마나 채워 쓰는지 재는 Occupancy까지 살펴보겠습니다.</p><p>진행 순서는 1회차와 같습니다. 주제마다 아래 열 가지를 차례대로 짚습니다. 기준 제품은 1회차와 마찬가지로 NVIDIA <button class="t" data-t="h100">H100</button>입니다.</p>
   <div class="flow" aria-label="주제별 진행 순서">
     <span><b>1</b>정의</span><span><b>2</b>등장 배경</span><span><b>3</b>구조</span><span><b>4</b>작동 방식</span><span><b>5</b>이점</span><span><b>6</b>부재 시 문제</span><span><b>7</b>단점</span><span><b>8</b>대안 기술</span><span><b>9</b>대안과의 비교</span><span><b>10</b>실무 관점</span>
   </div>
@@ -31,16 +31,16 @@
 <div class="part" id="p1">
   <div class="pk">PART 1</div>
   <h2>SM (Streaming Multiprocessor)</h2>
-  <p>1회차에서 "SM 안쪽은 다음 회차에서 다룬다"고 했던 바로 그 부분입니다.</p>
+  <p>1회차에서 "다음 회차에서 다룬다"고 했던 SM 안쪽입니다.</p>
 </div>
 
 <section class="ch" id="s1-1">
   <div class="ch-head"><span class="ch-num">1.1</span><h2>정의</h2></div>
-  <p class="lead"><button class="t" data-t="sm">SM</button>은 GPU 안에서 <b>실제로 계산을 하는 기본 단위</b>입니다. 1회차 비유로 말하면 '팀'에 해당합니다.</p>
+  <p class="lead"><button class="t" data-t="sm">SM</button>은 GPU 안에서 <b>실제로 계산을 하는 기본 단위</b>입니다.</p>
   <div class="prose">
     <ul>
-      <li>SM 하나 안에는 계산하는 유닛, 데이터를 놓아두는 저장 공간, 일을 나눠 주는 제어 회로가 모두 들어 있습니다. 혼자서도 맡은 일을 끝까지 해낼 수 있는, 완결된 팀입니다.</li>
-      <li>GPU 칩은 이 똑같은 팀을 여러 개 복사해서 붙여 만듭니다. H100 SXM에는 일하는 SM이 132개 있습니다.</li>
+      <li>SM 하나 안에는 계산하는 유닛, 데이터를 놓아두는 저장 공간, 일을 나눠 주는 제어 회로가 모두 들어 있습니다.</li>
+      <li>GPU 칩은 같은 SM을 여러 개 복사해 붙여 만듭니다. H100 SXM에는 일하는 SM이 132개 있습니다.</li>
       <li>그래서 같은 세대 GPU끼리라면, SM이 몇 개냐가 성능을 가르는 가장 큰 기준이 됩니다.</li>
     </ul>
   </div>
@@ -50,30 +50,37 @@
   <div class="ch-head"><span class="ch-num">1.2</span><h2>등장 배경</h2></div>
   <div class="prose">
     <ul>
-      <li>2006년 이전의 GPU는 계산 장치가 용도별로 나뉘어 있었습니다. 물체의 꼭짓점 위치를 계산하는 장치와, 화면의 점 하나하나에 색을 칠하는 장치가 따로 있었습니다.</li>
-      <li>그러다 보니 장면에 따라 한쪽은 바쁘고 다른 쪽은 노는 일이 자주 생겼습니다.</li>
-      <li>게다가 1회차에서 본 것처럼, 연구자들은 GPU를 그래픽이 아닌 일반 계산에도 쓰고 싶어 했습니다. 용도가 정해진 장치로는 한계가 있었습니다.</li>
+      <li>2006년 이전 GPU는 계산 장치가 용도별로 고정돼 있었습니다. 꼭짓점 위치를 계산하는 정점 셰이더와, 화면의 점에 색을 칠하는 픽셀 셰이더가 따로 있었습니다.<br>예를 들어 GeForce 7900 GTX는 정점 셰이더 8개, 픽셀 셰이더 24개였습니다.</li>
+      <li>그래서 장면에 따라 한쪽만 바빴습니다. 숲처럼 모양이 복잡하면 정점 셰이더만, 넓은 하늘처럼 칠할 면이 많으면 픽셀 셰이더만 바쁘고 다른 쪽은 놀았습니다.</li>
+      <li>그래픽이 아닌 계산을 시키려면, 1회차에서 본 것처럼 계산을 "색칠"인 척 위장해야 했습니다.</li>
     </ul>
   </div>
   <div class="callout idea">
-    <span class="say">"그럼 어떤 일이든 할 수 있는 같은 모양의 팀을 만들고, 필요한 만큼 찍어 붙이자!"</span>
-    그렇게 2006년 NVIDIA의 G80 칩에서 처음 등장한 것이 바로 <b>SM</b>입니다.
+    <span class="say">"그럼 용도를 나누지 말고, 무슨 계산이든 하는 똑같은 계산 단위를 여러 개 두자!"</span>
+    그래서 2006년 NVIDIA G80 칩에서 처음 등장한 것이 바로 <b>SM</b>입니다.
     <ul>
-      <li>G80에는 SM이 16개, SM마다 계산 유닛이 8개씩, 모두 128개가 들어 있었습니다.</li>
-      <li>같은 해에 CUDA도 함께 발표됐습니다. 범용 계산용 하드웨어와 소프트웨어가 짝을 이뤄 나온 셈입니다.</li>
-      <li>그 뒤로 NVIDIA는 세대가 바뀔 때마다 SM 안을 개선하고, SM 개수를 늘리는 방식으로 성능을 키워 왔습니다.</li>
+      <li>일이 몰리는 쪽에 SM이 그때그때 붙어서, 노는 장치가 사라졌습니다.</li>
+      <li>그래픽이 아닌 계산도 그대로 맡길 수 있게 돼, 같은 해에 CUDA가 함께 발표됐습니다.</li>
+      <li>G80의 SM은 16개였고, 이후 SM 수를 늘려 성능을 키운 끝에 H100에서는 132개가 됐습니다.</li>
     </ul>
   </div>
+  <details>
+    <summary>Q. 왜 큰 SM 하나가 아니라 작은 SM을 여러 개 만드나요?</summary>
+    <div class="prose"><ul>
+      <li>큰 장치 하나는 제어 회로가 지나치게 복잡해지고, 칩 안에서 데이터가 오가는 거리도 길어집니다.</li>
+      <li>결함이 하나만 생겨도 전체를 못 쓰게 됩니다.</li>
+      <li>작은 SM 여러 개는 같은 설계를 복사하면 되고, 결함이 난 SM만 끄면 됩니다.</li>
+    </ul></div>
+  </details>
 </section>
 
 <section class="ch" id="s1-3">
   <div class="ch-head"><span class="ch-num">1.3</span><h2>구조</h2></div>
-  <h3>1. 칩 안의 조직도: GPC, TPC, SM</h3>
+  <h3>1. 칩 안의 계층</h3>
   <div class="prose">
     <ul>
-      <li>SM 두 개를 묶으면 <button class="t" data-t="tpc">TPC</button>, 즉 '부서'가 됩니다. TPC 아홉 개를 묶으면 <button class="t" data-t="gpc">GPC</button>, 즉 '본부'가 됩니다.</li>
-      <li>H100 칩 안에는 GPC가 8개 있습니다. 그래서 설계상 SM은 8 곱하기 9 곱하기 2, 모두 144개입니다.</li>
-      <li>그런데 실제 판매 제품은 이 중 일부를 꺼 둡니다. 칩이 워낙 커서 어딘가에 제조 결함이 생기기 쉽기 때문입니다(<button class="t" data-t="yield">수율</button> 확보). H100 SXM은 132개, H100 PCIe는 114개만 켜져 있습니다.</li>
+      <li>SM 2개가 모여 <button class="t" data-t="tpc">TPC</button>, TPC 9개가 모여 <button class="t" data-t="gpc">GPC</button>가 됩니다. H100에는 GPC가 8개라서, 설계상 SM은 8 곱하기 9 곱하기 2, 144개입니다.</li>
+      <li>실제 제품은 일부를 꺼 둡니다. H100 SXM은 132개, H100 PCIe는 114개를 켭니다.</li>
     </ul>
   </div>
   <figure class="fig">
@@ -89,86 +96,127 @@
     <div class="legend"><span><i class="sw" style="background:var(--accent)"></i>켜진 SM</span><span><i class="sw" style="background:var(--off)"></i>꺼진 SM</span><span><i class="sw" style="background:var(--mem)"></i>칩 전체 공용 자원</span></div>
     <figcaption>꺼진 SM의 위치는 칩마다 다릅니다. 회색 칸 위치는 개수를 보여 주기 위한 예시입니다.</figcaption>
   </figure>
-  <p class="prose">모든 팀이 함께 쓰는 자원도 있습니다. 1회차 메모리 계층에서 봤던 L2 캐시와 VRAM입니다.</p>
-  <div class="tbl"><table>
-    <thead><tr><th>자원</th><th>회사 비유</th><th>H100 SXM</th></tr></thead>
-    <tbody>
-      <tr><td><button class="t" data-t="hbm">HBM</button> (VRAM)</td><td>회사 밖 대형 창고</td><td>80GB, 초당 약 3.35TB 전송</td></tr>
-      <tr><td><button class="t" data-t="l2">L2 캐시</button></td><td>모든 팀이 함께 쓰는 공용 자료실</td><td>50MB</td></tr>
-    </tbody>
-  </table></div>
+  <details>
+    <summary>Q. 왜 144개 중 132개만 켜 두나요?</summary>
+    <div class="prose"><p>칩이 커서 만들다 보면 어딘가에 결함이 생기기 쉽습니다. 처음부터 일부를 끌 것으로 정해 두면, 결함이 몇 개 있는 칩도 버리지 않고 팔 수 있습니다. 이걸 <button class="t" data-t="yield">수율</button>을 지킨다고 합니다.<br>꺼진 위치는 칩마다 다르고, 켜진 개수만 맞춥니다.</p></div>
+  </details>
 
-  <h3>2. SM 안의 구성: 팀 안에는 무엇이 있나</h3>
-  <p class="prose">SM 하나는 다시 네 개의 파트로 나뉩니다. 파트마다 파트장 한 명, 일반 팀원 32명, 표 계산 전용 기계 한 대가 있다고 생각하면 됩니다. 이걸 SM 한 개 기준으로 모으면 아래 표와 같습니다.</p>
+  <h3>2. SM 안의 구성</h3>
+  <p class="prose">SM은 네 파트로 나뉘고, 파트마다 Warp Scheduler 하나, CUDA Core 32개, Tensor Core 하나가 있습니다.</p>
   <div class="tbl"><table>
-    <thead><tr><th>구성</th><th>회사 비유</th><th>하는 일</th><th>H100 SM 1개당</th></tr></thead>
+    <thead><tr><th>구성</th><th>하는 일</th><th>H100 SM 1개당</th></tr></thead>
     <tbody>
-      <tr><td><button class="t" data-t="cudacore">CUDA Core</button></td><td>계산기를 든 일반 팀원</td><td>숫자 하나씩 계산</td><td>128개</td></tr>
-      <tr><td><button class="t" data-t="tensorcore">Tensor Core</button></td><td>표 계산 전용 기계</td><td>행렬(표) 곱셈을 한 번에</td><td>4개</td></tr>
-      <tr><td><button class="t" data-t="scheduler">Warp Scheduler</button></td><td>파트장</td><td>다음에 어느 조가 일할지 고름</td><td>4개</td></tr>
-      <tr><td><button class="t" data-t="register">레지스터</button></td><td>팀원 각자의 손안 메모지</td><td>지금 계산 중인 값 보관</td><td>256KB</td></tr>
-      <tr><td><button class="t" data-t="smem">Shared Memory</button></td><td>팀 공용 책상</td><td>같은 팀끼리 데이터 공유</td><td>최대 228KB</td></tr>
+      <tr><td><button class="t" data-t="cudacore">CUDA Core</button></td><td>숫자 하나씩 계산</td><td class="num">128개</td></tr>
+      <tr><td><button class="t" data-t="tensorcore">Tensor Core</button></td><td>행렬 곱셈을 한 번에</td><td class="num">4개</td></tr>
+      <tr><td><button class="t" data-t="scheduler">Warp Scheduler</button></td><td>다음에 실행할 warp를 고름</td><td class="num">4개</td></tr>
+      <tr><td><button class="t" data-t="register">레지스터</button></td><td>스레드마다 지금 계산 중인 값 보관</td><td class="num">256KB</td></tr>
+      <tr><td><button class="t" data-t="smem">Shared Memory</button></td><td>같은 블록의 스레드끼리 데이터 공유</td><td class="num">최대 228KB</td></tr>
     </tbody>
   </table></div>
   <div class="prose">
-    <p>SM 하나에는 동시에 최대 <b>2,048개의 작업 흐름, 즉 <button class="t" data-t="thread">스레드</button></b>가 대기할 수 있습니다. CPU 코어 하나가 보통 한두 개를 다루는 것과 비교하면 성격이 완전히 다르다는 걸 알 수 있습니다.</p>
+    <ul>
+      <li>모든 SM이 함께 쓰는 자원은 <button class="t" data-t="l2">L2 캐시</button>(50MB)와 VRAM(<button class="t" data-t="hbm">HBM3</button> 80GB, 초당 약 3.35TB)입니다.</li>
+      <li>SM 하나에는 <button class="t" data-t="thread">스레드</button>가 최대 2,048개까지 동시에 대기할 수 있습니다. CPU 코어 하나가 한두 개를 다루는 것과 크게 다릅니다.</li>
+    </ul>
   </div>
+  <details>
+    <summary>Q. 기초 · 레지스터, Shared Memory, L2 캐시, VRAM은 무엇이 다른가요?</summary>
+    <div class="prose">
+      <p>계산 유닛에서 가까운 순서입니다. 가까울수록 빠르고, 작습니다.</p>
+      <ul>
+        <li><b>레지스터:</b> 스레드마다 따로 쓰는 공간입니다.</li>
+        <li><b>Shared Memory:</b> 같은 블록의 스레드끼리 함께 쓰는 공간입니다. SM 안에 있습니다.</li>
+        <li><b>L2 캐시:</b> 모든 SM이 함께 쓰는 공간입니다.</li>
+        <li><b>VRAM:</b> GPU의 메인 메모리입니다. 모델과 데이터가 여기에 있습니다.</li>
+      </ul>
+    </div>
+  </details>
 </section>
 
 <section class="ch" id="s1-4">
   <div class="ch-head"><span class="ch-num">1.4</span><h2>작동 방식</h2></div>
-  <h3>1. 일을 나누는 단위: 커널, 블록, warp, 스레드</h3>
-  <p class="prose">프로그램이 GPU에 일을 맡길 때는 큰 일을 작은 묶음으로 잘게 쪼개서 넘깁니다. 이 단위들은 방금 본 회사 조직과 짝을 이룹니다. 자세한 프로그래밍 구조는 3회차에서 다룹니다.</p>
+  <h3>1. 일을 나누는 단위</h3>
+  <p class="prose">프로그램은 일을 작은 묶음으로 쪼개서 GPU에 넘깁니다. 자세한 프로그래밍 구조는 3회차에서 다룹니다.</p>
   <div class="tbl"><table>
-    <thead><tr><th>단위</th><th>회사 비유</th><th>크기</th><th>어디서 실행되나</th></tr></thead>
+    <thead><tr><th>단위</th><th>크기</th><th>어디서 실행되나</th></tr></thead>
     <tbody>
-      <tr><td><button class="t" data-t="kernel">커널</button></td><td>회사 전체에 내려온 업무 지시서</td><td>GPU에서 도는 함수 1회</td><td>GPU 전체</td></tr>
-      <tr><td><button class="t" data-t="block">블록</button></td><td>한 팀에 통째로 맡기는 과제</td><td>최대 1,024 스레드</td><td>SM 1개 (끝날 때까지 안 옮김)</td></tr>
-      <tr><td><button class="t" data-t="warp">Warp</button></td><td>같은 구호에 맞춰 움직이는 32명 한 조</td><td>항상 32 스레드</td><td>파트장 한 명이 관리</td></tr>
-      <tr><td><button class="t" data-t="thread">스레드</button></td><td>팀원 한 명의 일</td><td>1</td><td>계산 유닛 한 칸</td></tr>
+      <tr><td><button class="t" data-t="kernel">커널</button></td><td>GPU에서 도는 함수 1회</td><td>GPU 전체</td></tr>
+      <tr><td><button class="t" data-t="block">블록</button></td><td>최대 1,024 스레드</td><td>SM 1개 (끝날 때까지 안 옮김)</td></tr>
+      <tr><td><button class="t" data-t="warp">warp</button></td><td>항상 32 스레드</td><td>Warp Scheduler가 관리</td></tr>
+      <tr><td>스레드</td><td>1</td><td>계산 유닛 한 칸</td></tr>
     </tbody>
   </table></div>
-  <h3>2. 순서대로 따라가 보기</h3>
+  <details>
+    <summary>Q. 기초 · 커널, 블록, warp, 스레드를 예시로 보면요?</summary>
+    <div class="prose"><p>1회차의 배열 더하기에서, 1,048,576칸을 더하는 커널 하나는 256개 스레드짜리 블록 4,096개로 나뉩니다. warp로 세면 32,768개입니다. 스레드 하나가 한 칸을 맡습니다.</p></div>
+  </details>
+  <details>
+    <summary>Q. 기초 · GPU의 커널은 운영체제의 커널과 같은 건가요?</summary>
+    <div class="prose"><p>이름만 같습니다. GPU에서 커널은 GPU가 실행하는 함수 하나를 뜻합니다.</p></div>
+  </details>
+  <h3>2. 실행 순서</h3>
   <div class="prose">
     <ol>
-      <li><b>업무 지시:</b> CPU가 커널 실행을 지시하면, GPU는 그 일을 블록 단위로 쪼갭니다.</li>
-      <li><b>팀 배정:</b> 블록은 비어 있는 SM에 하나씩 배정됩니다. 한번 배정된 블록은 끝날 때까지 그 SM을 떠나지 않습니다.</li>
-      <li><b>조 편성:</b> SM 안에서 블록은 다시 32명씩 warp로 나뉩니다. 한 조의 32명은 같은 명령을 동시에, 각자 다른 데이터에 실행합니다.</li>
-      <li><b>파트장의 선택:</b> 파트장은 매 순간 "지금 바로 일할 수 있는 조"를 하나 골라 명령을 줍니다.</li>
-      <li><b>다음 과제:</b> 블록 하나가 끝나면 그 자리에 다음 블록이 들어옵니다.</li>
+      <li><b>블록 배정:</b> 커널이 시작되면 블록이 빈 SM에 하나씩 배정됩니다. 배정된 블록은 끝날 때까지 그 SM에 머뭅니다.</li>
+      <li><b>warp 나누기:</b> 블록은 32개 스레드씩 warp로 나뉩니다. warp 안의 스레드는 같은 명령을 각자 다른 데이터에 실행합니다.</li>
+      <li><b>warp 선택:</b> Warp Scheduler가 매 순간 바로 실행할 수 있는 warp를 골라 명령을 줍니다.</li>
+      <li><b>다음 블록:</b> 블록이 끝나면 그 자리에 다음 블록이 들어옵니다.</li>
     </ol>
   </div>
-  <h3>3. 기다리는 동안 다른 조에게 일 시키기 (지연 은닉)</h3>
+  <details>
+    <summary>Q. 왜 warp는 32개 스레드인가요?</summary>
+    <div class="prose">
+      <p>NVIDIA의 설계값이고, 공식적으로 이유를 하나로 밝힌 적은 없습니다. 보통은 균형점으로 설명합니다.</p>
+      <ul>
+        <li>묶음이 작으면 명령을 나눠 주는 회로의 비용이 상대적으로 커집니다.</li>
+        <li>묶음이 크면 if문으로 길이 갈릴 때 쉬는 스레드가 늘어납니다.</li>
+        <li>G80 이후 32를 유지해서, 예전 코드도 새 GPU에 그대로 맞습니다. 참고로 AMD 데이터센터 GPU는 64개입니다.</li>
+      </ul>
+    </div>
+  </details>
+  <details>
+    <summary>Q. 왜 블록은 다른 SM으로 옮길 수 없나요?</summary>
+    <div class="prose"><p>블록의 스레드들이 그 SM의 레지스터와 Shared Memory를 함께 쓰고 있어서, 옮기려면 그 데이터를 전부 복사해야 합니다. 대신 블록끼리는 서로 기다리지 않게 만들어서, 어느 SM에서 어떤 순서로 돌아도 결과가 같게 합니다.</p></div>
+  </details>
+  <h3>3. 기다리는 동안 다른 warp 실행하기 (<button class="t" data-t="latency">지연 은닉</button>)</h3>
   <div class="prose">
     <ul>
-      <li>창고, 즉 VRAM에서 재료를 가져오는 데는 수백 사이클이 걸립니다. 계산 한 번보다 훨씬 오래 걸립니다.</li>
-      <li>그래서 한 조가 재료를 기다리는 동안, 파트장은 바로 일할 수 있는 다른 조에게 일을 넘깁니다. 계산 장치를 놀리지 않는 겁니다.</li>
-      <li>조를 바꾸는 데는 비용이 거의 들지 않습니다. 조마다 쓸 메모지, 즉 레지스터가 미리 따로 나눠져 있기 때문입니다.</li>
+      <li>VRAM에서 데이터를 가져오는 데는 수백 <button class="t" data-t="cycle">사이클</button>이 걸립니다.</li>
+      <li>그동안 Warp Scheduler는 바로 실행할 수 있는 다른 warp를 실행합니다.</li>
+      <li>warp마다 레지스터가 미리 나눠져 있어서, warp를 바꾸는 비용은 거의 없습니다.</li>
     </ul>
   </div>
-  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>대기 중인 조가 많을수록 기다림을 숨기기 쉽습니다.</b> 이렇게 "얼마나 많이 대기시켜 두었나"를 재는 값이 PART 4에서 볼 <button class="t" data-t="occupancy">Occupancy</button>입니다.</div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>대기 중인 warp가 많을수록 기다림을 숨기기 쉽습니다.</b> 이걸 재는 값이 PART 4의 <button class="t" data-t="occupancy">Occupancy</button>입니다.</div>
+  <details>
+    <summary>Q. 기초 · 사이클은 얼마나 짧은 시간인가요?</summary>
+    <div class="prose"><p>칩이 한 박자 움직이는 시간입니다. H100은 클럭이 약 1.98기가헤르츠라서 한 사이클이 약 0.5나노초입니다. 수백 사이클이면 수백 나노초이고, 그동안 계산을 수백 번 할 수 있습니다.</p></div>
+  </details>
+  <details>
+    <summary>Q. 왜 GPU는 warp를 바꾸는 비용이 거의 없고, CPU는 스레드를 바꾸는 비용이 큰가요?</summary>
+    <div class="prose"><p>CPU는 스레드를 바꿀 때 레지스터 값을 메모리에 저장하고 다시 불러옵니다. 이걸 문맥 전환이라고 합니다. GPU는 warp마다 레지스터를 미리 따로 줘서 이 과정이 없습니다. 대신 레지스터 공간이 아주 커서, H100은 SM 하나에 256KB입니다.</p></div>
+  </details>
 </section>
 
 <section class="ch" id="s1-5">
   <div class="ch-head"><span class="ch-num">1.5</span><h2>이점</h2></div>
   <div class="prose">
     <ul>
-      <li><b>확장이 쉽습니다:</b> SM 설계는 그대로 두고 개수만 조절하면, 작은 GPU부터 큰 GPU까지 만들 수 있습니다. 같은 세대인데 RTX 4060은 SM이 24개, RTX 4090은 128개입니다.</li>
-      <li><b>수율을 지킬 수 있습니다:</b> 결함이 생긴 SM만 꺼 두고 팔 수 있어서, 칩 하나에 작은 흠이 있다고 통째로 버리지 않아도 됩니다.</li>
-      <li><b>기다림을 숨깁니다:</b> 팀마다 수십 개의 조를 대기시켜 두고 번갈아 일을 시키니, 느린 메모리를 기다리는 시간이 겉으로 잘 드러나지 않습니다.</li>
-      <li><b>나눠 쓰기 좋습니다:</b> SM이 각각 독립된 팀이라서, 1.10에서 볼 MIG처럼 SM 단위로 GPU를 쪼개 여러 사람에게 나눠 줄 수 있습니다.</li>
+      <li><b>확장이 쉽습니다:</b> 같은 SM 설계로 개수만 바꿔 여러 제품을 만듭니다. 같은 세대인데 RTX 4060은 24개, RTX 4090은 128개입니다.</li>
+      <li><b>수율을 지킵니다:</b> 결함이 난 SM만 끄고 팔 수 있습니다.</li>
+      <li><b>기다림을 숨깁니다:</b> SM마다 수십 개의 warp를 대기시켜 번갈아 실행합니다.</li>
+      <li><b>나눠 쓰기 좋습니다:</b> SM 단위로 GPU를 쪼개는 <button class="t" data-t="mig">MIG</button>가 가능합니다. 1.10에서 봅니다.</li>
     </ul>
   </div>
 </section>
 
 <section class="ch" id="s1-6">
   <div class="ch-head"><span class="ch-num">1.6</span><h2>부재 시 문제</h2></div>
-  <p class="prose">SM처럼 같은 팀을 반복해 붙이는 구조가 없다고 가정해 보면, 이런 문제가 생깁니다.</p>
+  <p class="prose">같은 단위를 반복해 붙이는 구조가 없다고 가정해 보면, 이런 문제가 생깁니다.</p>
   <div class="prose">
     <ul>
-      <li>수천 개의 계산 유닛을 칩 하나가 한꺼번에 관리해야 합니다. 일을 나눠 주는 회로가 감당하기 어려울 만큼 복잡해집니다.</li>
-      <li>결함이 하나만 있어도 칩 전체를 버려야 합니다. 수율이 크게 떨어지고, 그만큼 값이 비싸집니다.</li>
-      <li>성능을 키우려면 매번 칩 전체를 새로 설계해야 합니다. 지금처럼 "SM 수를 늘린 다음 세대"를 빠르게 내놓기 어렵습니다.</li>
+      <li>수천 개 계산 유닛을 한꺼번에 관리하는 제어 회로가 지나치게 복잡해집니다.</li>
+      <li>결함 하나에 칩 전체를 버려야 해서 값이 비싸집니다.</li>
+      <li>성능을 올릴 때마다 칩 전체를 새로 설계해야 합니다.</li>
     </ul>
   </div>
 </section>
@@ -177,67 +225,67 @@
   <div class="ch-head"><span class="ch-num">1.7</span><h2>단점</h2></div>
   <div class="prose">
     <ul>
-      <li><b>조 안에서 할 일이 갈리면 느려집니다:</b> 같은 조 32명 중 일부는 A, 일부는 B를 해야 하면(분기), 두 일을 차례로 처리합니다. 그동안 나머지 팀원은 쉽니다.</li>
-      <li><b>팀 자원이 한정돼 있습니다:</b> 메모지와 공용 책상 크기가 정해져 있어서, 과제 하나가 자원을 많이 쓰면 동시에 대기시킬 수 있는 조 수가 줄어듭니다. PART 4에서 자세히 봅니다.</li>
-      <li><b>마지막 차례에 노는 팀이 생깁니다:</b> 과제 수가 SM 수와 딱 맞지 않으면, 마지막 차례에는 일부 팀만 일하고 나머지는 놉니다(<button class="t" data-t="wave">wave</button> 문제). 4.8에서 봅니다.</li>
-      <li><b>팀끼리 데이터를 주고받기 느립니다:</b> 다른 SM의 데이터는 공용 자료실(L2)이나 창고(VRAM)를 거쳐야 받을 수 있습니다.</li>
-      <li><b>작은 작업은 팀을 다 채우지 못합니다:</b> 블록 수가 적은 작업은 132개 SM 중 일부만 쓰고 끝납니다.</li>
+      <li><b>warp 안에서 길이 갈리면 느려집니다:</b> if문으로 일부 스레드는 A, 일부는 B를 해야 하면 두 길을 차례로 실행합니다. 그동안 나머지 스레드는 쉽니다. 이걸 <button class="t" data-t="divergence">분기</button>라고 합니다.</li>
+      <li><b>SM 자원이 한정돼 있습니다:</b> 블록이 레지스터나 Shared Memory를 많이 쓰면 동시에 올릴 수 있는 warp가 줄어듭니다. PART 4에서 봅니다.</li>
+      <li><b>마지막 차례에 노는 SM이 생깁니다:</b> 블록 수가 SM 수와 딱 맞지 않을 때입니다. 4.8에서 봅니다.</li>
+      <li><b>SM끼리 데이터를 주고받기 느립니다:</b> L2 캐시나 VRAM을 거쳐야 합니다.</li>
+      <li><b>작은 작업은 SM을 다 채우지 못합니다.</b></li>
     </ul>
   </div>
+  <details>
+    <summary>Q. 기초 · 분기는 정확히 무엇인가요?</summary>
+    <div class="prose"><p>if문에서 같은 warp의 스레드가 서로 다른 길로 가는 것입니다. "짝수 번은 A, 홀수 번은 B"라고 쓰면, A를 실행하는 동안 홀수 스레드가 쉬고, B를 실행하는 동안 짝수 스레드가 쉽니다. 시간이 두 배 걸립니다.</p></div>
+  </details>
 </section>
 
 <section class="ch" id="s1-8">
   <div class="ch-head"><span class="ch-num">1.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
-  <p class="prose">SM 구조 자체를 버리지는 않습니다. 대신 위의 단점을 하나씩 메우는 기술들이 나왔습니다.</p>
-  <h3>1. Thread Block Cluster (H100부터)</h3>
+  <h3>1. <button class="t" data-t="cluster">Thread Block Cluster</button> (H100부터)</h3>
   <div class="prose"><ul>
-    <li><b>뜻:</b> 가까이 있는 SM 여러 개를 하나로 묶어, 서로의 공용 책상(Shared Memory)을 직접 들여다볼 수 있게 한 기능입니다.</li>
-    <li><b>해결하는 단점:</b> 팀끼리 데이터를 주고받을 때마다 공용 자료실까지 다녀오지 않아도 됩니다.</li>
+    <li><b>뜻:</b> 가까운 SM 여러 개를 묶어, 서로의 Shared Memory를 직접 읽게 합니다.</li>
+    <li><b>해결하는 단점:</b> SM끼리 데이터를 주고받을 때 L2 캐시까지 가지 않아도 됩니다.</li>
   </ul></div>
-  <h3>2. MIG · MPS (GPU 나눠 쓰기)</h3>
+  <h3>2. MIG · <button class="t" data-t="mps">MPS</button></h3>
   <div class="prose"><ul>
-    <li><b>뜻:</b> GPU 한 장을 잘게 나누거나, 여러 작업을 동시에 올려서 노는 SM을 줄이는 방법입니다.</li>
-    <li><b>해결하는 단점:</b> 작은 작업이 GPU를 다 채우지 못하는 문제. 자세한 비교는 1.10에서 봅니다.</li>
+    <li><b>뜻:</b> GPU를 나누거나 여러 작업을 동시에 올려서 노는 SM을 줄입니다.</li>
+    <li><b>해결하는 단점:</b> 작은 작업이 GPU를 다 채우지 못하는 문제를 줄입니다. 1.10에서 비교합니다.</li>
   </ul></div>
-  <h3>3. 라이브러리의 자동 튜닝</h3>
+  <h3>3. 라이브러리 자동 튜닝</h3>
   <div class="prose"><ul>
-    <li><b>뜻:</b> cuBLAS, cuDNN 같은 라이브러리가 행렬 크기와 SM 수를 보고, 블록 크기와 일 나누는 방식을 알아서 고릅니다.</li>
-    <li><b>해결하는 단점:</b> 점유율과 wave 문제를 개발자가 직접 계산할 일이 크게 줄어듭니다.</li>
+    <li><b>뜻:</b> <button class="t" data-t="cublas">cuBLAS</button>, cuDNN이 행렬 크기와 SM 수에 맞춰 블록 크기와 나누는 방식을 알아서 고릅니다.</li>
+    <li><b>해결하는 단점:</b> 점유율과 wave를 개발자가 직접 계산할 일이 줄어듭니다.</li>
   </ul></div>
 </section>
 
 <section class="ch" id="s1-9">
   <div class="ch-head"><span class="ch-num">1.9</span><h2>대안과의 비교</h2></div>
-  <p class="prose">다른 회사 칩에도 SM과 같은 개념이 있습니다. 이름만 다를 뿐입니다.</p>
+  <p class="prose">다른 회사 칩에도 같은 개념이 이름만 바꿔 있습니다.</p>
   <div class="tbl"><table>
     <thead><tr><th>구분</th><th>NVIDIA GPU</th><th>AMD GPU</th><th>Intel GPU</th><th>CPU</th></tr></thead>
     <tbody>
       <tr><td>기본 단위</td><td>SM</td><td><button class="t" data-t="cu">CU</button> (Compute Unit)</td><td>Xe-core</td><td>코어</td></tr>
-      <tr><td>함께 움직이는 묶음</td><td>Warp, 32개</td><td>Wavefront, 64개 (데이터센터용 기준)</td><td>서브그룹, 16 또는 32개</td><td>SIMD (AVX-512 기준 FP32 16개)</td></tr>
-      <tr><td>행렬 전용 유닛</td><td>Tensor Core</td><td>Matrix Core</td><td>XMX</td><td>AMX (Intel Xeon)</td></tr>
+      <tr><td>함께 움직이는 묶음</td><td>warp, 32개</td><td>wavefront, 64개 (데이터센터용)</td><td>서브그룹, 16 또는 32개</td><td>SIMD (AVX-512 기준 FP32 16개)</td></tr>
+      <tr><td>행렬 전용 유닛</td><td>Tensor Core</td><td>Matrix Core</td><td>XMX</td><td><button class="t" data-t="amx">AMX</button> (Intel Xeon)</td></tr>
       <tr><td>대표 제품의 단위 수</td><td>H100 SXM 132개</td><td>MI300X 304개</td><td>Max 1550 128개</td><td>Xeon 6 최대 128코어</td></tr>
     </tbody>
   </table></div>
-  <div class="callout"><span class="ck">꼭 알아 둘 것</span>이름은 달라도 <b>"같은 팀을 여러 개 찍어 붙이고, 팀 안에서 여러 명이 같은 명령을 동시에 실행한다"</b>는 구조는 같습니다. 다른 회사 자료를 볼 때는 이름만 바꿔 읽으면 됩니다.</div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span>이름은 달라도 <b>"같은 계산 단위를 여러 개 붙이고, 그 안에서 여러 스레드가 같은 명령을 동시에 실행한다"</b>는 구조는 같습니다.</div>
 </section>
 
 <section class="ch" id="s1-10">
   <div class="ch-head"><span class="ch-num">1.10</span><h2>실무 관점</h2></div>
 
   <h3>1. 제품 볼 때: SM 수와 형태</h3>
-  <div class="prose"><p>같은 H100이라도 꽂는 방식에 따라 두 가지가 있고, 켜진 SM 수도 다릅니다.</p></div>
   <div class="tbl"><table>
     <thead><tr><th>형태</th><th>꽂는 곳</th><th>최대 전력</th><th>켜진 SM</th><th>특징</th></tr></thead>
     <tbody>
-      <tr><td><button class="t" data-t="sxm">SXM</button></td><td>전용 서버 보드</td><td>700W</td><td>132개</td><td>GPU끼리 <button class="t" data-t="nvlink">NVLink</button>로 빠르게 연결. 더 빠름</td></tr>
-      <tr><td><button class="t" data-t="pcie">PCIe</button></td><td>일반 서버 슬롯 (카드형)</td><td>350W</td><td>114개</td><td>설치가 쉽지만 성능이 낮음</td></tr>
+      <tr><td><button class="t" data-t="sxm">SXM</button></td><td>전용 서버 보드</td><td class="num">700W</td><td class="num">132개</td><td>GPU끼리 <button class="t" data-t="nvlink">NVLink</button>로 연결. 더 빠름</td></tr>
+      <tr><td><button class="t" data-t="pcie">PCIe</button></td><td>일반 서버 슬롯 (카드형)</td><td class="num">350W</td><td class="num">114개</td><td>설치가 쉽지만 성능이 낮음</td></tr>
     </tbody>
   </table></div>
 
-  <div class="prose"><p>점유율과 wave는 PART 4에서 따로 자세히 봅니다.</p></div>
-
-  <h3>2. 모니터링: GPU 사용률 지표의 함정</h3>
-  <p class="lead"><b>nvidia-smi의 GPU-Util이 100%라고 해서 GPU를 꽉 채워 쓰고 있다는 뜻은 아닙니다.</b> 이 값은 작업이 하나라도 돌고 있던 시간의 비율일 뿐이라, SM 132개 중 1개만 일해도 100%로 나올 수 있습니다.</p>
+  <h3>2. 모니터링: GPU-Util의 함정</h3>
+  <p class="lead"><b>nvidia-smi의 <button class="t" data-t="gpuutil">GPU-Util</button> 100%는 GPU를 꽉 채워 쓴다는 뜻이 아닙니다.</b> 작업이 하나라도 돈 시간의 비율이라, SM 1개만 일해도 100%가 나옵니다.</p>
   <figure class="fig">
     <div class="fig-title">같은 GPU, 다른 작업: 지표가 이렇게 다르게 나옵니다</div>
     <div class="seg" id="m-scen"></div>
@@ -246,34 +294,38 @@
       <div class="bars" id="m-bars"></div>
     </div>
     <div class="note" id="m-desc"></div>
-    <figcaption>값은 지표의 뜻을 보여 주기 위한 예시입니다. 왼쪽 그림은 SM 132칸이고, 진할수록 팀 안이 꽉 차 있습니다.</figcaption>
+    <figcaption>값은 지표의 뜻을 보여 주기 위한 예시입니다. 왼쪽 그림은 SM 132칸이고, 진할수록 SM 안이 꽉 차 있습니다.</figcaption>
   </figure>
   <div class="tbl"><table>
-    <thead><tr><th>지표</th><th>무엇을 재나</th><th>회사 비유</th><th>도구</th></tr></thead>
+    <thead><tr><th>지표</th><th>무엇을 재나</th><th>도구</th></tr></thead>
     <tbody>
-      <tr><td><button class="t" data-t="gpuutil">GPU-Util</button></td><td>작업이 하나라도 돌았던 시간 비율</td><td>사무실 불이 켜져 있던 시간</td><td>nvidia-smi</td></tr>
-      <tr><td><button class="t" data-t="smactive">SM Active</button></td><td>일감을 받은 SM의 비율</td><td>일하는 팀의 비율</td><td>DCGM</td></tr>
-      <tr><td><button class="t" data-t="smocc">SM Occupancy</button></td><td>SM 안을 얼마나 채웠나</td><td>팀마다 사람이 얼마나 차 있나</td><td>DCGM</td></tr>
-      <tr><td><button class="t" data-t="tensoractive">Tensor Active</button></td><td>Tensor Core가 일한 비율</td><td>표 계산 기계 가동률</td><td>DCGM</td></tr>
-      <tr><td><button class="t" data-t="mfu">MFU</button></td><td>이론 최대 성능 대비 실제 성능</td><td>최대 생산량 대비 실제 생산량</td><td>학습 코드에서 계산</td></tr>
+      <tr><td>GPU-Util</td><td>작업이 하나라도 돌았던 시간 비율</td><td>nvidia-smi</td></tr>
+      <tr><td><button class="t" data-t="smactive">SM Active</button></td><td>일감을 받은 SM의 비율</td><td>DCGM</td></tr>
+      <tr><td><button class="t" data-t="smocc">SM Occupancy</button></td><td>SM 안을 얼마나 채웠나</td><td>DCGM</td></tr>
+      <tr><td><button class="t" data-t="tensoractive">Tensor Active</button></td><td>Tensor Core가 일한 비율</td><td>DCGM</td></tr>
+      <tr><td><button class="t" data-t="mfu">MFU</button></td><td>이론 최대 성능 대비 실제 성능</td><td>학습 코드에서 계산</td></tr>
     </tbody>
   </table></div>
-  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>GPU 클러스터에서는 GPU-Util 하나만 보고 판단하지 않습니다. <button class="t" data-t="dcgm">DCGM</button>으로 SM Active, SM Occupancy, Tensor Active를 함께 봅니다.</b> 보통 DCGM Exporter에서 Prometheus로 모으고, Grafana 대시보드로 확인합니다. "100%인데 왜 느리지?"라는 질문에 답하려면 이 지표들이 필요합니다.</div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>GPU-Util만 보지 말고, <button class="t" data-t="dcgm">DCGM</button>으로 SM Active, SM Occupancy, Tensor Active를 함께 봅니다.</b> 보통 DCGM Exporter, Prometheus, Grafana 순서로 모아서 봅니다.</div>
+  <details>
+    <summary>Q. 기초 · nvidia-smi와 DCGM은 어디서 보나요?</summary>
+    <div class="prose"><p>nvidia-smi는 GPU 서버의 터미널에서 바로 실행하는 명령입니다. DCGM은 NVIDIA의 상세 모니터링 도구로, 쿠버네티스에서는 DCGM Exporter로 지표를 Prometheus에 모으고 Grafana로 봅니다. 설치와 운영은 13회차에서 다룹니다.</p></div>
+  </details>
 
-  <h3>3. GPU 나눠 쓰기: MIG, MPS, 타임 슬라이싱</h3>
-  <p class="prose">작은 작업은 GPU 한 장을 다 채우지 못합니다. 그래서 GPU 한 장을 여러 사용자나 작업이 나눠 쓰는 방법이 있습니다. 세 방식의 핵심 차이는 <b>서로 얼마나 확실하게 분리되느냐</b>입니다.</p>
+  <h3>3. GPU 나눠 쓰기</h3>
+  <p class="prose">작은 작업 여러 개가 GPU 한 장을 나눠 쓰는 방법입니다. 핵심 차이는 <b>얼마나 확실하게 분리되느냐</b>입니다.</p>
   <div class="tbl"><table>
-    <thead><tr><th>방식</th><th>회사 비유</th><th>격리</th><th>지원</th><th>어울리는 곳</th></tr></thead>
+    <thead><tr><th>방식</th><th>한 줄 설명</th><th>격리</th><th>지원</th><th>어울리는 곳</th></tr></thead>
     <tbody>
-      <tr><td><button class="t" data-t="mig">MIG</button></td><td>회사를 벽으로 나눠 독립 회사 여러 개로</td><td>강함 (메모리·장애 분리)</td><td>A100부터, 최대 7개</td><td>여러 사용자·서비스에 일부씩 배정</td></tr>
-      <tr><td><button class="t" data-t="mps">MPS</button></td><td>한 사무실에서 여러 프로젝트가 동시에 진행</td><td>약함 (메모리 분리 없음)</td><td>Volta부터 본격 지원</td><td>작은 추론 작업 여러 개</td></tr>
-      <tr><td><button class="t" data-t="timeslice">타임 슬라이싱</button></td><td>시간을 나눠 교대로 사용</td><td>시간만 분리</td><td>드라이버·쿠버네티스 설정</td><td>개발·테스트 환경</td></tr>
+      <tr><td>MIG</td><td>GPU를 하드웨어에서 최대 7개로 잘라 독립 GPU처럼 사용</td><td>강함 (메모리·장애 분리)</td><td>A100부터, 최대 7개</td><td>여러 사용자·서비스에 일부씩 배정</td></tr>
+      <tr><td>MPS</td><td>여러 프로그램이 GPU 한 장을 동시에 함께 사용</td><td>약함 (메모리 분리 없음)</td><td>Volta부터 본격 지원</td><td>작은 추론 작업 여러 개</td></tr>
+      <tr><td><button class="t" data-t="timeslice">타임 슬라이싱</button></td><td>시간을 나눠 번갈아 사용</td><td>시간만 분리</td><td>드라이버·쿠버네티스 설정</td><td>개발·테스트 환경</td></tr>
     </tbody>
   </table></div>
   <div class="prose">
     <ul>
-      <li>MIG 예시를 하나 들면, A100 40GB의 <code>1g.5gb</code> 프로파일은 SM 14개와 메모리 5GB를 가진 작은 GPU 하나처럼 동작합니다.</li>
-      <li>쿠버네티스에서는 <button class="t" data-t="dra">DRA</button>로 이런 GPU 조각을 배정하는 방식이 퍼지고 있습니다. 1.34 버전에서 정식 기능이 됐습니다.</li>
+      <li>예를 들어 A100 40GB의 <code>1g.5gb</code> MIG는 SM 14개와 메모리 5GB짜리 작은 GPU처럼 동작합니다.</li>
+      <li>쿠버네티스에서는 <button class="t" data-t="dra">DRA</button>로 이런 조각을 배정합니다. DRA는 1.34에서 정식 기능이 됐습니다. MIG와 MPS 설정은 14회차에서 다룹니다.</li>
     </ul>
   </div>
 </section>
@@ -282,77 +334,88 @@
 <div class="part" id="p2">
   <div class="pk">PART 2</div>
   <h2>CUDA Core</h2>
-  <p>여기까지가 SM이라는 팀이었습니다. 이제 그 팀에서 가장 많은 수를 차지하는 일반 팀원, CUDA Core를 보겠습니다.</p>
+  <p>여기까지가 SM이었습니다. 이제 SM 안에서 가장 수가 많은 계산 유닛, CUDA Core를 보겠습니다.</p>
 </div>
 
 <section class="ch" id="s2-1">
   <div class="ch-head"><span class="ch-num">2.1</span><h2>정의</h2></div>
-  <p class="lead"><button class="t" data-t="cudacore">CUDA Core</button>는 <b>SM 안에서 숫자 하나씩 계산하는 기본 계산 유닛</b>입니다. 회사 비유로는 계산기를 든 일반 팀원입니다.</p>
+  <p class="lead"><button class="t" data-t="cudacore">CUDA Core</button>는 <b>숫자 하나씩 계산하는 SM의 기본 계산 유닛</b>입니다.</p>
   <div class="prose">
     <ul>
-      <li>덧셈, 곱셈 같은 일반 계산을 한 번에 하나씩 처리합니다.</li>
-      <li>H100 SXM에는 SM마다 128개, 전체로는 16,896개가 있습니다.</li>
-      <li>정확히 말하면 CUDA Core는 32비트 실수, 즉 FP32를 계산하는 유닛에 NVIDIA가 붙인 이름입니다. CPU 코어처럼 혼자 움직이는 코어는 아닙니다.</li>
+      <li>H100 SXM에는 SM마다 128개, 모두 16,896개가 있습니다.</li>
+      <li>정확히는 <button class="t" data-t="fp">FP32</button>, 즉 32비트 실수 계산 유닛에 NVIDIA가 붙인 이름입니다.</li>
     </ul>
   </div>
+  <details>
+    <summary>Q. 왜 CUDA Core 수를 CPU 코어 수와 비교하면 안 되나요?</summary>
+    <div class="prose"><p>CPU 코어는 명령을 스스로 읽고 판단하는 완전한 처리기입니다. CUDA Core는 명령을 받아 계산만 하는 칸이고, 32개가 명령 하나를 함께 받습니다. 그래서 개수를 나란히 놓고 비교할 수 없습니다.</p></div>
+  </details>
 </section>
 
 <section class="ch" id="s2-2">
   <div class="ch-head"><span class="ch-num">2.2</span><h2>등장 배경</h2></div>
   <div class="prose">
     <ul>
-      <li>1.2에서 본 것처럼, 2006년 G80은 용도별로 나뉘어 있던 계산 장치를 하나의 범용 계산 유닛으로 합쳤습니다. 당시 이름은 '스트리밍 프로세서'였고, G80에는 128개가 있었습니다.</li>
-      <li>그런데 이 유닛으로 과학 계산까지 하려면, 국제 표준에 맞는 정확한 계산과 더 정밀한 숫자인 FP64 계산이 필요했습니다.</li>
+      <li>1.2에서 본 것처럼, G80은 용도별 장치를 범용 계산 유닛 128개로 합쳤습니다. 당시 이름은 스트리밍 프로세서였습니다.</li>
+      <li>과학 계산까지 하려면 국제 표준에 맞는 정확한 계산과 FP64 계산이 더 필요했습니다.</li>
     </ul>
   </div>
   <div class="callout idea">
-    <span class="say">"그럼 그래픽이든 과학 계산이든, 어떤 계산이든 정확하게 해내는 팀원을 잔뜩 두자!"</span>
-    그래서 2010년 Fermi 세대에서 새 이름을 달고 등장한 것이 바로 <b>CUDA Core</b>입니다.
+    <span class="say">"그럼 어떤 계산이든 정확하게 해내는 계산 유닛을 잔뜩 두자!"</span>
+    그래서 2010년 Fermi 세대에서 새 이름으로 등장한 것이 바로 <b>CUDA Core</b>입니다.
     <ul>
-      <li>Fermi의 대표 칩에는 설계상 CUDA Core가 512개 들어 있었습니다.</li>
-      <li>국제 표준(IEEE 754-2008)에 맞춘 곱셈과 덧셈을 지원해, 과학 계산에서도 믿고 쓸 수 있게 됐습니다.</li>
-      <li>이때부터 "코어가 몇 개냐"가 GPU를 소개하는 대표 숫자가 됐습니다. 이 숫자를 어떻게 읽어야 하는지는 2.10에서 봅니다.</li>
+      <li>Fermi 대표 칩에는 설계상 512개가 들어갔습니다.</li>
+      <li>국제 표준(IEEE 754-2008)에 맞는 곱셈과 덧셈을 지원했습니다.</li>
+      <li>이때부터 "코어 수"가 GPU를 소개하는 대표 숫자가 됐습니다.</li>
     </ul>
   </div>
 </section>
 
 <section class="ch" id="s2-3">
   <div class="ch-head"><span class="ch-num">2.3</span><h2>구조</h2></div>
-  <p class="prose">SM의 네 파트에는 각각 CUDA Core가 32개씩 있습니다. 4 곱하기 32, 그래서 SM 하나에 128개입니다. 같은 파트 안에는 다른 종류의 계산을 맡는 유닛도 함께 있습니다.</p>
+  <p class="prose">SM의 네 파트마다 32개씩, SM 하나에 128개입니다. 같은 파트에는 다른 계산 유닛도 함께 있습니다.</p>
   <div class="tbl"><table>
-    <thead><tr><th>유닛</th><th>회사 비유</th><th>하는 일</th><th>H100 SM 1개당</th></tr></thead>
+    <thead><tr><th>유닛</th><th>하는 일</th><th>H100 SM 1개당</th></tr></thead>
     <tbody>
-      <tr><td>FP32 유닛 (CUDA Core)</td><td>계산기를 든 일반 팀원</td><td>실수 계산</td><td>128개</td></tr>
-      <tr><td>INT32 유닛</td><td>정수 담당 팀원</td><td>정수 계산, 주소 계산</td><td>64개</td></tr>
-      <tr><td>FP64 유닛</td><td>정밀 계산 담당 팀원</td><td>64비트 실수 계산</td><td>64개</td></tr>
-      <tr><td><button class="t" data-t="sfu">SFU</button></td><td>공학용 계산기</td><td>sin, exp 같은 특수 함수</td><td>16개</td></tr>
-      <tr><td>Tensor Core</td><td>표 계산 전용 기계</td><td>행렬 곱셈 (PART 3)</td><td>4개</td></tr>
+      <tr><td>FP32 유닛 (CUDA Core)</td><td>실수 계산</td><td class="num">128개</td></tr>
+      <tr><td>INT32 유닛</td><td>정수 계산, 주소 계산</td><td class="num">64개</td></tr>
+      <tr><td>FP64 유닛</td><td>64비트 실수 계산</td><td class="num">64개</td></tr>
+      <tr><td><button class="t" data-t="sfu">SFU</button></td><td>sin, exp 같은 특수 함수</td><td class="num">16개</td></tr>
+      <tr><td>Tensor Core</td><td>행렬 곱셈 (PART 3)</td><td class="num">4개</td></tr>
     </tbody>
   </table></div>
-  <p class="prose">보통 "CUDA Core 개수"라고 하면 이 중 FP32 유닛 수만 셉니다.</p>
+  <p class="prose">보통 "CUDA Core 개수"라고 하면 FP32 유닛 수만 셉니다.</p>
 </section>
 
 <section class="ch" id="s2-4">
   <div class="ch-head"><span class="ch-num">2.4</span><h2>작동 방식</h2></div>
   <div class="prose">
     <ol>
-      <li><b>명령 받기:</b> 파트장이 한 조, 즉 warp 하나를 골라 명령을 내립니다.</li>
-      <li><b>동시에 실행:</b> 조의 32명이 같은 명령을 각자 자기 숫자에 동시에 실행합니다. 파트마다 CUDA Core가 32개라서, 딱 한 조 분량입니다.</li>
-      <li><b>곱하고 더하기를 한 번에:</b> 가장 많이 쓰는 명령은 <button class="t" data-t="fma">FMA</button>입니다. "a 곱하기 b, 거기에 c 더하기"를 한 번에 처리하고, 연산 두 번으로 셉니다.</li>
-      <li><b>결과 적기:</b> 결과는 각자의 메모지, 즉 레지스터에 적습니다.</li>
+      <li><b>명령 받기:</b> Warp Scheduler가 warp 하나를 골라 명령을 줍니다.</li>
+      <li><b>동시에 실행:</b> warp의 32개 스레드가 같은 명령을 각자 숫자에 실행합니다. 파트마다 CUDA Core가 32개라 딱 warp 하나 분량입니다.</li>
+      <li><b>곱하고 더하기를 한 번에:</b> 가장 많이 쓰는 명령은 <button class="t" data-t="fma">FMA</button>, 즉 "a 곱하기 b 더하기 c"입니다. 연산 두 번으로 셉니다.</li>
+      <li><b>결과 저장:</b> 결과는 각 스레드의 레지스터에 남습니다.</li>
     </ol>
   </div>
-  <div class="callout"><span class="ck">계산해 보기</span>이 구조 덕분에 성능 수치를 직접 계산할 수 있습니다. H100 SXM의 FP32 성능은 CUDA Core 16,896개에 2를 곱하고, 다시 클럭 약 1.98기가헤르츠를 곱한 값입니다. 계산하면 <b>약 67 TFLOPS</b>로, 스펙 시트 숫자와 맞습니다.</div>
+  <div class="callout"><span class="ck">계산해 보기</span>H100 SXM의 FP32 성능은 CUDA Core 16,896개 곱하기 2, 곱하기 클럭 약 1.98기가헤르츠입니다. <b>약 67 <button class="t" data-t="tflops">TFLOPS</button></b>로 스펙 시트와 맞습니다.</div>
+  <details>
+    <summary>Q. 왜 성능을 계산할 때 2를 곱하나요?</summary>
+    <div class="prose"><p>FMA 한 번이 곱셈과 덧셈을 함께 하기 때문입니다. 업계에서는 이걸 연산 두 번으로 셉니다.</p></div>
+  </details>
+  <details>
+    <summary>Q. 기초 · TFLOPS는 어떻게 읽나요?</summary>
+    <div class="prose"><p>초당 1조 번의 실수 연산입니다. 67 TFLOPS는 1초에 실수 계산을 67조 번 한다는 뜻입니다. 어느 정밀도 기준인지에 따라 숫자가 크게 달라지니 함께 확인합니다.</p></div>
+  </details>
 </section>
 
 <section class="ch" id="s2-5">
   <div class="ch-head"><span class="ch-num">2.5</span><h2>이점</h2></div>
   <div class="prose">
     <ul>
-      <li><b>무엇이든 계산합니다:</b> 행렬 곱셈뿐 아니라 조건 판단, 정수 계산, 특수 함수까지 다 합니다. GPU에서 돌아가는 모든 프로그램의 기본 일꾼입니다.</li>
-      <li><b>수가 많습니다:</b> H100 한 장에 만 육천 개가 넘게 있어서, 같은 계산을 대량으로 반복하는 일에 강합니다.</li>
-      <li><b>프로그래밍이 쉽습니다:</b> 1회차에서 본 CUDA 코드처럼, 팀원 한 명이 할 일만 일반 C 코드로 적으면 됩니다.</li>
-      <li><b>Tensor Core의 앞뒤를 맡습니다:</b> 활성화 함수, 정규화, 데이터 전처리처럼 행렬 곱셈 사이사이의 일을 처리합니다.</li>
+      <li><b>무엇이든 계산합니다:</b> 조건 판단, 정수 계산, 특수 함수까지 다 합니다.</li>
+      <li><b>수가 많습니다:</b> H100 한 장에 1만 6천 개가 넘어서, 같은 계산을 대량으로 반복하는 일에 강합니다.</li>
+      <li><b>프로그래밍이 쉽습니다:</b> 스레드 하나가 할 일만 C 코드로 적으면 됩니다.</li>
+      <li><b>Tensor Core의 앞뒤를 맡습니다:</b> 활성화 함수, 정규화, 전처리처럼 행렬 곱셈 사이의 일을 처리합니다.</li>
     </ul>
   </div>
 </section>
@@ -362,48 +425,55 @@
   <p class="prose">CUDA Core 없이 Tensor Core만 있다고 가정해 보면, 이런 문제가 생깁니다.</p>
   <div class="prose">
     <ul>
-      <li>행렬 곱셈 말고는 아무것도 못 합니다. 활성화 함수 하나도 계산할 수 없어서, AI 모델이 끝까지 돌지 않습니다.</li>
-      <li>그래픽 처리나 과학 계산처럼 행렬 모양이 아닌 일은 GPU에서 할 수 없게 됩니다.</li>
-      <li>1회차에서 본 CUDA의 방식, 즉 "팀원 한 명이 할 일을 적는다"는 프로그래밍 방식 자체가 성립하지 않습니다.</li>
+      <li>행렬 곱셈 말고는 아무것도 못 해서 AI 모델이 끝까지 돌지 않습니다.</li>
+      <li>그래픽이나 과학 계산을 GPU에서 할 수 없습니다.</li>
+      <li>"스레드 하나가 할 일을 적는다"는 CUDA 프로그래밍 방식이 성립하지 않습니다.</li>
     </ul>
   </div>
+  <details>
+    <summary>Q. Tensor Core가 훨씬 빠른데, 왜 CUDA Core를 계속 많이 넣나요?</summary>
+    <div class="prose"><p>Tensor Core가 못 하는 일이 많기 때문입니다. 1회차의 <button class="t" data-t="amdahl">암달의 법칙</button>처럼, 빠르게 만들지 못한 부분이 전체 속도의 상한을 정합니다. CUDA Core 쪽이 느리면 Tensor Core가 아무리 빨라도 전체가 느려집니다.</p></div>
+  </details>
 </section>
 
 <section class="ch" id="s2-7">
   <div class="ch-head"><span class="ch-num">2.7</span><h2>단점</h2></div>
   <div class="prose">
     <ul>
-      <li><b>개수가 오해를 부릅니다:</b> CPU 코어처럼 혼자 움직이지 않는데도, '코어'라는 이름 때문에 CPU 코어 수와 나란히 비교되곤 합니다.</li>
-      <li><b>행렬 곱셈에는 느립니다:</b> 같은 H100에서 Tensor Core보다 약 15배 느립니다. 3.5에서 다시 봅니다.</li>
-      <li><b>혼자 움직이지 못합니다:</b> 32명이 한 명령으로 움직이기 때문에, 조 안에서 할 일이 갈리면 일부가 쉽니다. 1.7에서 본 분기 문제입니다.</li>
-      <li><b>재료가 늦으면 놉니다:</b> 단순 계산은 순식간에 끝나서, 창고에서 데이터를 가져오는 속도가 성능을 정하는 경우가 많습니다.</li>
-      <li><b>소비자용 GPU는 FP64가 약합니다:</b> RTX 4090은 FP64 성능이 FP32의 64분의 1입니다. 1회차에서 "소비자용 GPU는 정밀한 과학 계산에 제약이 있다"고 한 이유가 이것입니다.</li>
+      <li><b>개수가 오해를 부릅니다:</b> '코어'라는 이름 때문에 CPU 코어 수와 비교되곤 합니다.</li>
+      <li><b>행렬 곱셈에는 느립니다:</b> 같은 H100에서 Tensor Core보다 약 15배 느립니다.</li>
+      <li><b>혼자 움직이지 못합니다:</b> 32개가 한 명령으로 움직여서, 분기가 생기면 일부가 쉽니다.</li>
+      <li><b>데이터가 늦으면 놉니다:</b> 단순 계산은 금방 끝나서, VRAM에서 데이터를 가져오는 속도가 성능을 정하는 경우가 많습니다.</li>
+      <li><b>게이밍 GPU는 FP64가 약합니다:</b> RTX 4090은 FP64 성능이 FP32의 64분의 1입니다.</li>
     </ul>
   </div>
+  <details>
+    <summary>Q. 왜 게이밍 GPU는 FP64가 약한가요?</summary>
+    <div class="prose"><p>게임과 그래픽에는 FP64가 거의 필요 없어서, 칩 면적을 FP32와 그래픽 기능에 씁니다. 과학 계산 고객을 위한 데이터센터 GPU에는 FP64 유닛을 넉넉히 넣습니다.</p></div>
+  </details>
 </section>
 
 <section class="ch" id="s2-8">
   <div class="ch-head"><span class="ch-num">2.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
   <h3>1. <button class="t" data-t="tf32">TF32</button> (A100부터)</h3>
   <div class="prose"><ul>
-    <li><b>뜻:</b> FP32로 짠 코드의 행렬 곱셈을, 코드를 고치지 않고 Tensor Core가 대신 처리하게 하는 형식입니다. PyTorch에서는 설정 한 줄로 켭니다.</li>
-    <li><b>해결하는 단점:</b> 행렬 곱셈에서 CUDA Core가 느린 문제를 줄여 줍니다.</li>
+    <li><b>뜻:</b> FP32 코드의 행렬 곱셈을, 코드 수정 없이 Tensor Core가 대신 처리하게 하는 형식입니다. PyTorch에서는 설정 한 줄로 켭니다.</li>
+    <li><b>해결하는 단점:</b> 행렬 곱셈에서 CUDA Core가 느린 문제를 줄입니다.</li>
   </ul></div>
-  <h3>2. <button class="t" data-t="fusion">커널 퓨전</button> (연산 합치기)</h3>
+  <h3>2. <button class="t" data-t="fusion">커널 퓨전</button></h3>
   <div class="prose"><ul>
-    <li><b>뜻:</b> 여러 단순 계산을 하나로 합쳐서, 중간 결과를 창고에 갔다 오지 않게 하는 기법입니다. torch.compile과 Triton이 자동으로 해 줍니다.</li>
-    <li><b>해결하는 단점:</b> 재료가 늦어서 CUDA Core가 노는 문제를 줄여 줍니다.</li>
+    <li><b>뜻:</b> 여러 단순 계산을 하나로 합쳐서, 중간 결과가 VRAM을 오가지 않게 합니다. torch.compile과 <button class="t" data-t="triton">Triton</button>이 자동으로 해 줍니다.</li>
+    <li><b>해결하는 단점:</b> 데이터가 늦어서 CUDA Core가 노는 문제를 줄입니다.</li>
   </ul></div>
   <h3>3. 데이터센터용 GPU 선택</h3>
   <div class="prose"><ul>
-    <li><b>뜻:</b> H100 같은 데이터센터용 GPU는 FP64 유닛을 넉넉하게 넣어 둡니다. H100 SXM의 FP64 성능은 약 34 TFLOPS입니다.</li>
-    <li><b>해결하는 단점:</b> 소비자용 GPU의 FP64가 약한 문제를 피할 수 있습니다.</li>
+    <li><b>뜻:</b> H100 같은 데이터센터용 GPU는 FP64 유닛을 넉넉히 넣어 둡니다. H100 SXM의 FP64는 약 34 TFLOPS입니다.</li>
+    <li><b>해결하는 단점:</b> 게이밍 GPU의 FP64가 약한 문제를 피합니다.</li>
   </ul></div>
 </section>
 
 <section class="ch" id="s2-9">
   <div class="ch-head"><span class="ch-num">2.9</span><h2>대안과의 비교</h2></div>
-  <p class="prose">CUDA Core를 CPU 코어, 그리고 AMD GPU의 같은 유닛과 나란히 놓아 보겠습니다.</p>
   <div class="tbl"><table>
     <thead><tr><th>구분</th><th>CPU 코어</th><th>NVIDIA CUDA Core</th><th>AMD Stream Processor</th></tr></thead>
     <tbody>
@@ -413,7 +483,7 @@
       <tr><td>잘하는 일</td><td>복잡한 판단, 순서대로 하는 일</td><td>같은 계산 대량 반복</td><td>같은 계산 대량 반복</td></tr>
     </tbody>
   </table></div>
-  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>CUDA Core 한 개는 CPU 코어 한 개보다 훨씬 단순합니다.</b> 굳이 비교하자면 CPU 코어 하나가 아니라, CPU 코어 안에서 같은 계산을 동시에 하는 칸 하나와 비슷합니다.</div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>CUDA Core 하나는 CPU 코어 하나보다 훨씬 단순합니다.</b> CPU 코어 안에서 같은 계산을 동시에 하는 칸 하나에 더 가깝습니다.</div>
 </section>
 
 <section class="ch" id="s2-10">
@@ -429,11 +499,11 @@
       <tr><td>RTX 5090</td><td>Blackwell, 2025</td><td class="num">21,760</td><td class="num">104.8</td></tr>
     </tbody>
   </table></div>
-  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>AI용 GPU를 비교할 때 CUDA Core 개수는 기준이 아닙니다.</b> 위 표에서 RTX 4090은 FP32 성능이 A100보다 네 배 넘게 높습니다. 그런데 AI 학습에서는 Tensor Core 성능과 메모리 용량, 메모리 속도 때문에 A100이 앞서는 경우가 많습니다.</div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>AI용 GPU를 비교할 때 CUDA Core 개수는 기준이 아닙니다.</b> RTX 4090은 FP32가 A100보다 네 배 넘게 높지만, AI 학습에서는 Tensor Core 성능과 메모리 때문에 A100이 앞서는 경우가 많습니다.</div>
   <h3>2. 모니터링: FP32 Active</h3>
   <div class="prose"><ul>
-    <li>DCGM에는 CUDA Core가 FP32 계산을 한 비율을 보여 주는 FP32 Active 지표가 있습니다.</li>
-    <li>1.10의 Tensor Active와 함께 보면, 실제로 어떤 유닛이 일했는지 알 수 있습니다. AI 학습인데 FP32 Active만 높고 Tensor Active가 낮다면, Tensor Core를 제대로 쓰지 못하고 있다는 신호입니다.</li>
+    <li>DCGM의 FP32 Active는 CUDA Core가 FP32 계산을 한 비율입니다.</li>
+    <li>AI 학습인데 FP32 Active만 높고 Tensor Active가 낮다면, Tensor Core를 제대로 못 쓰고 있다는 신호입니다.</li>
   </ul></div>
 </section>
 
@@ -441,36 +511,40 @@
 <div class="part" id="p3">
   <div class="pk">PART 3</div>
   <h2>Tensor Core</h2>
-  <p>여기까지가 숫자 하나씩 계산하는 CUDA Core였습니다. 이제 표 한 덩어리를 한 번에 계산하는 전용 기계, Tensor Core로 넘어가겠습니다.</p>
+  <p>여기까지가 숫자 하나씩 계산하는 CUDA Core였습니다. 이제 행렬을 한 번에 계산하는 Tensor Core로 넘어가겠습니다.</p>
 </div>
 
 <section class="ch" id="s3-1">
   <div class="ch-head"><span class="ch-num">3.1</span><h2>정의</h2></div>
-  <p class="lead"><button class="t" data-t="tensorcore">Tensor Core</button>는 <b>행렬, 즉 숫자 표끼리의 곱셈만 전담하는 계산 유닛</b>입니다. 팀 안에 들여놓은 표 계산 전용 기계라고 생각하면 됩니다.</p>
+  <p class="lead"><button class="t" data-t="tensorcore">Tensor Core</button>는 <b>행렬, 즉 숫자 표끼리의 곱셈만 전담하는 계산 유닛</b>입니다.</p>
   <div class="prose">
     <ul>
-      <li>CUDA Core가 숫자를 하나씩 곱하고 더한다면, Tensor Core는 작은 표 한 덩어리를 한 번에 곱합니다.</li>
-      <li>SM마다 4개씩 들어 있어서, H100 SXM 전체로는 528개가 있습니다.</li>
-      <li>AI 계산의 대부분이 <button class="t" data-t="matrix">행렬</button> 곱셈이기 때문에, 오늘날 AI 성능을 좌우하는 것은 Tensor Core입니다.</li>
+      <li>작은 행렬 한 덩어리를 한 번에 곱합니다.</li>
+      <li>SM마다 4개, H100 SXM 전체로는 528개입니다.</li>
+      <li>AI 계산의 대부분이 <button class="t" data-t="matrix">행렬</button> 곱셈이라, AI 성능은 Tensor Core가 좌우합니다.</li>
     </ul>
   </div>
+  <details>
+    <summary>Q. 기초 · AI 계산에는 왜 행렬 곱셈이 많나요?</summary>
+    <div class="prose"><p>신경망 한 층의 계산이 "입력 숫자 묶음 곱하기 가중치 행렬"이기 때문입니다. 층이 수십에서 수백 개이고 데이터도 여러 개를 한꺼번에 넣으니, 계산 대부분이 큰 행렬 곱셈이 됩니다.</p></div>
+  </details>
 </section>
 
 <section class="ch" id="s3-2">
   <div class="ch-head"><span class="ch-num">3.2</span><h2>등장 배경</h2></div>
   <div class="prose">
     <ul>
-      <li>2012년 AlexNet 이후 딥러닝 모델이 빠르게 커졌습니다. 그런데 딥러닝 계산을 뜯어 보면 대부분이 행렬 곱셈이었습니다.</li>
-      <li>CUDA Core로도 행렬 곱셈은 할 수 있습니다. 하지만 숫자를 하나씩 곱하고 더하는 방식이라, 모델이 커질수록 한계가 뚜렷해졌습니다.</li>
-      <li>2016년에는 구글이 행렬 연산 전용 칩인 <button class="t" data-t="tpu">TPU</button>를 공개했습니다. GPU에도 AI 전용 하드웨어가 필요하다는 압박이 커졌습니다.</li>
+      <li>2012년 AlexNet 이후 딥러닝이 빠르게 커졌고, 계산의 대부분은 행렬 곱셈이었습니다.</li>
+      <li>CUDA Core는 숫자를 하나씩 계산해서, 모델이 커질수록 한계가 뚜렷했습니다.</li>
+      <li>2016년 구글이 행렬 연산 전용 칩 <button class="t" data-t="tpu">TPU</button>를 공개하면서 압박이 커졌습니다.</li>
     </ul>
   </div>
   <div class="callout idea">
-    <span class="say">"그럼 행렬 곱셈만 하는 전용 기계를 SM 안에 넣자!"</span>
-    그래서 2017년 V100(Volta 세대)에서 처음 등장한 것이 바로 <b>Tensor Core</b>입니다.
+    <span class="say">"그럼 행렬 곱셈만 하는 전용 회로를 SM 안에 넣자!"</span>
+    그래서 2017년 V100(Volta)에서 처음 등장한 것이 바로 <b>Tensor Core</b>입니다.
     <ul>
-      <li>V100에는 Tensor Core가 640개 들어갔습니다. SM 80개에 8개씩입니다.</li>
-      <li>이후 세대마다 다룰 수 있는 숫자 형식을 넓혀 왔습니다. 세대별 변화는 3.10에서 정리합니다.</li>
+      <li>V100에는 SM 80개에 8개씩, 모두 640개가 들어갔습니다.</li>
+      <li>이후 세대마다 다룰 수 있는 숫자 형식이 늘었습니다. 3.10에서 정리합니다.</li>
     </ul>
   </div>
 </section>
@@ -479,44 +553,39 @@
   <div class="ch-head"><span class="ch-num">3.3</span><h2>구조</h2></div>
   <div class="prose">
     <ul>
-      <li>Tensor Core는 SM의 네 파트에 하나씩 들어 있습니다. 그래서 SM 하나당 4개입니다.</li>
-      <li>CUDA Core와 같은 팀 안에 있어서, 같은 메모지(레지스터)와 공용 책상(Shared Memory)을 함께 씁니다.</li>
+      <li>SM의 네 파트에 하나씩, SM당 4개입니다.</li>
+      <li>CUDA Core와 같은 레지스터, Shared Memory를 함께 씁니다.</li>
     </ul>
   </div>
   <div class="tbl"><table>
-    <thead><tr><th></th><th>CUDA Core</th><th>Tensor Core</th></tr></thead>
+    <thead><tr><th>구분</th><th>CUDA Core</th><th>Tensor Core</th></tr></thead>
     <tbody>
-      <tr><td>비유</td><td>계산기를 든 팀원</td><td>표 계산 전용 기계</td></tr>
-      <tr><td>한 번에 하는 일</td><td>곱하고 더하기 1회</td><td>작은 표끼리 곱셈 수십~수백 회</td></tr>
-      <tr><td>맡는 일</td><td>모든 일반 계산, 전처리, 활성화 함수 등</td><td>AI의 행렬 곱셈만</td></tr>
-      <tr><td>H100 SXM 개수</td><td>약 16,900개</td><td>528개 (SM 132 × 4)</td></tr>
+      <tr><td>역할</td><td>숫자 하나씩 계산하는 범용 유닛</td><td>행렬 곱셈 전용 유닛</td></tr>
+      <tr><td>한 번에 하는 일</td><td>곱하고 더하기 1회</td><td>작은 행렬끼리 곱셈 수십~수백 회</td></tr>
+      <tr><td>맡는 일</td><td>일반 계산, 전처리, 활성화 함수 등</td><td>AI의 행렬 곱셈</td></tr>
+      <tr><td>H100 SXM 개수</td><td>16,896개</td><td>528개 (SM 132 × 4)</td></tr>
       <tr><td>도입</td><td>2010년 Fermi부터 이 이름</td><td>2017년 Volta (V100)</td></tr>
     </tbody>
   </table></div>
-  <div class="prose">
-    <ul>
-      <li>Tensor Core는 행렬 곱셈만 할 수 있습니다. CUDA Core 없이는 일반 프로그램이 돌지 않으니, 둘은 경쟁이 아니라 역할 분담 관계입니다.</li>
-    </ul>
-  </div>
+  <p class="prose">둘은 경쟁이 아니라 역할 분담 관계입니다.</p>
 </section>
 
 <section class="ch" id="s3-4">
   <div class="ch-head"><span class="ch-num">3.4</span><h2>작동 방식</h2></div>
-  <h3>1. 작은 표를 한 번에 곱하고 더하기</h3>
+  <h3>1. 작은 행렬 단위로 곱하고 더하기</h3>
   <div class="prose">
-    <p>Tensor Core는 "작은 표 A 곱하기 작은 표 B, 거기에 표 C를 더하기"를 명령 한 번에 처리합니다. 큰 행렬은 이 작은 조각을 여러 번 반복해서 계산합니다.</p>
+    <p>Tensor Core는 "작은 행렬 A 곱하기 B, 더하기 C"를 명령 한 번에 처리합니다.</p>
     <ol>
-      <li><b>자르기:</b> 큰 행렬을 작은 조각(타일)으로 자릅니다.</li>
-      <li><b>가까이 가져오기:</b> 조각을 창고(VRAM)에서 공용 책상(Shared Memory)과 메모지(레지스터)로 옮겨 옵니다.</li>
-      <li><b>한 번에 계산:</b> 한 조(warp)가 Tensor Core에 "이 두 조각을 곱해서 더해라"를 한 번에 명령합니다.</li>
-      <li><b>합치기:</b> 조각별 결과를 차곡차곡 더해 큰 행렬의 답을 완성합니다.</li>
+      <li><b>자르기:</b> 큰 행렬을 작은 조각, 즉 타일로 자릅니다.</li>
+      <li><b>가져오기:</b> 조각을 VRAM에서 Shared Memory와 레지스터로 옮깁니다.</li>
+      <li><b>계산:</b> warp 하나가 Tensor Core에 두 조각의 곱셈을 명령합니다.</li>
+      <li><b>합치기:</b> 조각별 결과를 더해 전체 답을 만듭니다.</li>
     </ol>
-    <p>개발자가 이 과정을 직접 짜는 일은 드뭅니다. PyTorch가 cuBLAS, cuDNN 같은 라이브러리를 부르면, 라이브러리가 알아서 Tensor Core를 씁니다.</p>
+    <p>이 과정은 PyTorch가 부르는 cuBLAS, <button class="t" data-t="cudnn">cuDNN</button>이 알아서 처리합니다.</p>
   </div>
-  <h3>2. 정밀도: 숫자 하나를 몇 비트로 저장하나</h3>
+  <h3>2. 정밀도</h3>
   <div class="prose">
-    <p>FP32, BF16 같은 이름은 숫자 하나를 몇 비트로 저장하느냐를 뜻합니다. 비트가 줄면 더 빠르고 메모리를 덜 쓰지만, 그만큼 덜 정확해집니다.</p>
-    <p>자의 눈금을 떠올리면 쉽습니다. 눈금을 거칠게 하면 빨리 잴 수 있지만, 세밀함은 떨어집니다.</p>
+    <p>FP32, BF16 같은 이름은 숫자 하나를 몇 비트로 저장하는지를 뜻합니다. 비트가 적을수록 빠르고 메모리를 덜 쓰지만, 덜 정확합니다. 자의 눈금을 거칠게 하는 것과 비슷합니다.</p>
   </div>
   <figure class="fig">
     <div class="fig-title">형식별 비트 수 (막대가 짧을수록 빠르고 가벼움)</div>
@@ -525,40 +594,60 @@
   <div class="tbl"><table>
     <thead><tr><th>형식</th><th>비트</th><th>주 용도</th><th>Tensor Core 지원 시작</th></tr></thead>
     <tbody>
-      <tr><td>FP64</td><td>64</td><td>과학 계산 (정확도 최우선)</td><td>Ampere (A100)</td></tr>
-      <tr><td>FP32</td><td>32</td><td>범용 계산, 기준 형식</td><td>CUDA Core가 담당</td></tr>
-      <tr><td>FP16 / BF16</td><td>16</td><td>AI 학습의 표준</td><td>Volta / Ampere</td></tr>
-      <tr><td>FP8</td><td>8</td><td>학습·추론 가속</td><td>Hopper (H100)</td></tr>
-      <tr><td>FP4</td><td>4</td><td>추론 가속</td><td>Blackwell</td></tr>
+      <tr><td>FP64</td><td class="num">64</td><td>과학 계산 (정확도 최우선)</td><td>Ampere (A100)</td></tr>
+      <tr><td>FP32</td><td class="num">32</td><td>범용 계산, 기준 형식</td><td>CUDA Core가 담당</td></tr>
+      <tr><td>FP16 / BF16</td><td class="num">16</td><td>AI 학습의 표준</td><td>Volta / Ampere</td></tr>
+      <tr><td>FP8</td><td class="num">8</td><td>학습·추론 가속</td><td>Hopper (H100)</td></tr>
+      <tr><td>FP4</td><td class="num">4</td><td>추론 가속</td><td>Blackwell</td></tr>
     </tbody>
   </table></div>
   <div class="prose">
     <ul>
-      <li>비트 수가 절반이 될 때마다, 같은 GPU에서 계산 성능 수치는 약 두 배가 되고 메모리 사용량은 절반이 됩니다.</li>
-      <li>Tensor Core는 <b>곱셈은 낮은 정밀도로, 합계는 높은 정밀도(FP32)로</b> 쌓습니다. 이걸 <button class="t" data-t="mixed">혼합 정밀도</button>라고 부릅니다. 속도와 정확도를 함께 챙기는 방법입니다.</li>
+      <li>비트가 절반이 되면 성능 수치는 약 두 배, 메모리 사용량은 절반이 됩니다.</li>
+      <li>Tensor Core는 <b>곱셈은 낮은 정밀도로, 합계는 FP32로</b> 쌓습니다. 이를 <button class="t" data-t="mixed">혼합 정밀도</button>라고 합니다.</li>
     </ul>
   </div>
+  <details>
+    <summary>Q. 기초 · FP32, BF16, INT8 같은 이름은 무슨 뜻인가요?</summary>
+    <div class="prose"><p>FP는 소수점이 있는 실수(Floating Point), INT는 정수(Integer)입니다. 뒤의 숫자는 비트 수입니다. BF16의 B는 Brain으로, 구글 브레인 팀이 AI 학습용으로 만든 형식이라 붙은 이름입니다.</p></div>
+  </details>
+  <details>
+    <summary>Q. 기초 · 비트 수가 줄면 왜 빨라지나요?</summary>
+    <div class="prose"><p>같은 크기의 회로로 한 번에 더 많은 숫자를 계산할 수 있고, 메모리에서 옮길 데이터도 줄어서 같은 대역폭으로 더 많은 숫자를 나르기 때문입니다.</p></div>
+  </details>
+  <details>
+    <summary>Q. 왜 AI는 정밀도를 낮춰도 결과가 크게 틀리지 않나요?</summary>
+    <div class="prose"><p>신경망은 수많은 숫자를 곱하고 더하는데, 개별 오차는 더하는 과정에서 서로 상쇄되는 경우가 많습니다. 합계는 FP32로 쌓아서 오차가 불어나는 것도 막습니다. 다만 모든 층이 괜찮지는 않아서 Transformer Engine 같은 기술이 필요합니다.</p></div>
+  </details>
+  <details>
+    <summary>Q. 같은 16비트인데, 왜 학습에는 FP16보다 BF16을 쓰나요?</summary>
+    <div class="prose"><p>BF16은 숫자 크기 범위를 FP32와 같게 두고 정밀도를 줄인 형식입니다. FP16은 정밀도가 더 높은 대신 범위가 좁아서, 학습 중 아주 크거나 작은 값이 넘치거나 0이 되기 쉽습니다. 그래서 BF16이 더 안정적입니다.</p></div>
+  </details>
 </section>
 
 <section class="ch" id="s3-5">
   <div class="ch-head"><span class="ch-num">3.5</span><h2>이점</h2></div>
   <div class="prose">
     <ul>
-      <li><b>훨씬 빠릅니다:</b> 같은 H100 SXM에서 CUDA Core의 FP32 성능은 약 67 <button class="t" data-t="tflops">TFLOPS</button>입니다. Tensor Core의 BF16 성능은 약 989 TFLOPS로, 약 15배입니다.</li>
-      <li><b>비트를 줄이면 더 빨라집니다:</b> 같은 H100에서 FP8로 계산하면 약 1,979 TFLOPS가 나옵니다.</li>
-      <li><b>전력 대비 효율이 좋습니다:</b> 행렬 곱셈만 하도록 회로를 좁혔기 때문에, 같은 전력으로 훨씬 많은 계산을 합니다.</li>
-      <li><b>메모리를 아낍니다:</b> 낮은 정밀도로 돌리면 모델이 VRAM을 덜 차지합니다. 1회차에서 본 VRAM 계산 공식의 '파라미터당 바이트'가 바로 이 부분입니다.</li>
+      <li><b>훨씬 빠릅니다:</b> H100 SXM에서 CUDA Core의 FP32는 약 67 TFLOPS, Tensor Core의 BF16은 약 989 TFLOPS로 약 15배입니다.</li>
+      <li><b>비트를 줄이면 더 빨라집니다:</b> FP8은 약 1,979 TFLOPS입니다.</li>
+      <li><b>전력 효율이 좋습니다:</b> 같은 전력으로 훨씬 많이 계산합니다.</li>
+      <li><b>메모리를 아낍니다:</b> 1회차 VRAM 공식의 "파라미터당 바이트"가 줄어듭니다.</li>
     </ul>
   </div>
+  <details>
+    <summary>Q. 왜 행렬 곱셈 전용 회로는 그렇게 빠른가요?</summary>
+    <div class="prose"><p>명령을 읽고 해석하는 비용을 한 번만 내고, 곱셈과 덧셈 수십에서 수백 번을 한꺼번에 처리합니다. 가져온 숫자를 회로 안에서 여러 번 재사용하고, 범용 회로가 없는 만큼 같은 면적에 계산 회로를 더 많이 넣을 수 있습니다.</p></div>
+  </details>
 </section>
 
 <section class="ch" id="s3-6">
   <div class="ch-head"><span class="ch-num">3.6</span><h2>부재 시 문제</h2></div>
   <div class="prose">
     <ul>
-      <li>같은 AI 학습을 하려면 GPU 대수나 학습 시간이 이론상 최대 열 배 넘게 늘어납니다.</li>
-      <li>전력과 비용도 그만큼 늘어나고, LLM 서비스의 응답은 느려집니다.</li>
-      <li>FP8, FP4 같은 낮은 정밀도 가속도 쓸 수 없어서, 큰 모델을 서비스하는 비용이 크게 올라갑니다.</li>
+      <li>같은 학습에 GPU 대수나 시간이 이론상 열 배 넘게 늘어납니다.</li>
+      <li>전력과 비용이 늘고, LLM 서비스의 응답이 느려집니다.</li>
+      <li>FP8, FP4 가속도 쓸 수 없어서 큰 모델을 서비스하는 비용이 크게 오릅니다.</li>
     </ul>
   </div>
 </section>
@@ -567,41 +656,45 @@
   <div class="ch-head"><span class="ch-num">3.7</span><h2>단점</h2></div>
   <div class="prose">
     <ul>
-      <li><b>행렬 곱셈만 합니다:</b> 활성화 함수, 정규화, 데이터 전처리 같은 나머지 일은 CUDA Core가 합니다. 그쪽이 느리면 Tensor Core는 기다리며 놉니다.</li>
-      <li><b>모양을 탑니다:</b> 행렬 크기가 8이나 16의 배수가 아니면 빈칸이 생겨 효율이 떨어집니다.</li>
-      <li><b>정밀도를 낮추면 정확도가 흔들릴 수 있습니다:</b> FP8, FP4는 표현할 수 있는 범위가 좁아서, 아주 큰 값은 넘치고 아주 작은 값은 0으로 뭉개질 수 있습니다.</li>
-      <li><b>데이터 공급이 못 따라오면 놉니다:</b> 계산이 빨라진 만큼, 창고에서 재료를 나르는 속도(메모리 대역폭)가 병목이 되기 쉽습니다. 1회차에서 "컨베이어 벨트가 느리면 소용없다"고 했던 이야기와 같습니다.</li>
+      <li><b>행렬 곱셈만 합니다:</b> 나머지는 CUDA Core 몫이라, 그쪽이 느리면 Tensor Core가 기다립니다.</li>
+      <li><b>모양을 탑니다:</b> 행렬 크기가 8이나 16의 배수가 아니면 효율이 떨어집니다.</li>
+      <li><b>정확도가 흔들릴 수 있습니다:</b> FP8, FP4는 표현 범위가 좁아서 값이 넘치거나 0으로 뭉개질 수 있습니다.</li>
+      <li><b>데이터 공급이 병목이 됩니다:</b> 계산이 빨라진 만큼 메모리 대역폭이 따라가기 어렵습니다. 1회차의 "컨베이어 벨트" 이야기와 같습니다.</li>
     </ul>
   </div>
+  <details>
+    <summary>Q. 왜 행렬 크기가 8이나 16의 배수가 아니면 효율이 떨어지나요?</summary>
+    <div class="prose"><p>Tensor Core는 정해진 크기의 조각 단위로 계산합니다. 크기가 배수가 아니면 마지막 조각에 빈칸이 생기고, 빈칸도 계산하는 만큼 시간을 씁니다. 그래서 모델의 차원 수를 8이나 64의 배수로 맞추는 경우가 많습니다.</p></div>
+  </details>
 </section>
 
 <section class="ch" id="s3-8">
   <div class="ch-head"><span class="ch-num">3.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
-  <h3>1. Transformer Engine (H100부터)</h3>
+  <h3>1. <button class="t" data-t="te">Transformer Engine</button> (H100부터)</h3>
   <div class="prose"><ul>
-    <li><b>뜻:</b> 모델의 층마다 FP8과 FP16·BF16 중 알맞은 형식을 골라 주고, 값의 크기를 자동으로 조정해 주는 기능입니다.</li>
-    <li><b>해결하는 단점:</b> FP8로 낮췄을 때 정확도가 흔들리는 문제를 줄여 줍니다.</li>
+    <li><b>뜻:</b> 층마다 FP8과 FP16·BF16 중 알맞은 형식을 고르고, 값의 크기를 자동으로 조정합니다.</li>
+    <li><b>해결하는 단점:</b> FP8로 낮췄을 때 정확도가 흔들리는 문제를 줄입니다.</li>
   </ul></div>
   <h3>2. 마이크로 스케일링 형식 (Blackwell부터)</h3>
   <div class="prose"><ul>
-    <li><b>뜻:</b> 숫자를 16~32개씩 작은 묶음으로 나누고, 묶음마다 배율을 따로 붙여 두는 방식입니다. MXFP8, MXFP4, NVFP4가 여기에 속합니다.</li>
-    <li><b>해결하는 단점:</b> 4비트처럼 아주 거친 눈금으로도 정확도를 지킬 수 있게 해 줍니다.</li>
+    <li><b>뜻:</b> 숫자를 16에서 32개씩 묶고, 묶음마다 배율을 따로 둡니다. MXFP8, MXFP4, NVFP4가 여기에 속합니다.</li>
+    <li><b>해결하는 단점:</b> 4비트처럼 거친 형식으로도 정확도를 지킵니다.</li>
   </ul></div>
-  <h3>3. 구조적 희소성 (A100부터)</h3>
+  <h3>3. <button class="t" data-t="sparsity">구조적 희소성</button> (A100부터)</h3>
   <div class="prose"><ul>
-    <li><b>뜻:</b> 숫자 네 개 중 두 개를 0으로 만든 행렬은, 0인 칸을 건너뛰어 최대 두 배 빠르게 계산합니다.</li>
-    <li><b>주의:</b> 스펙 시트에 "희소성 포함"이라고 적힌 수치가 바로 이 기준입니다. 일반적인 모델은 이 조건을 맞추지 않으므로 그 숫자의 절반으로 봐야 합니다.</li>
+    <li><b>뜻:</b> 숫자 네 개 중 두 개가 0인 행렬은 0을 건너뛰어 최대 두 배 빠르게 계산합니다.</li>
+    <li><b>주의:</b> 스펙 시트의 "희소성 포함" 수치가 이 기준입니다. 대부분의 모델은 이 조건을 맞추지 않습니다.</li>
   </ul></div>
   <h3>4. <button class="t" data-t="tma">TMA</button> (H100부터)</h3>
   <div class="prose"><ul>
-    <li><b>뜻:</b> 창고(VRAM)에서 공용 책상(Shared Memory)으로 큰 데이터 덩어리를 옮기는 일만 전담하는 장치입니다.</li>
-    <li><b>해결하는 단점:</b> 팀원들이 재료 나르기에 손을 쓰지 않아도 돼서, Tensor Core가 기다리는 시간을 줄여 줍니다.</li>
+    <li><b>뜻:</b> VRAM에서 Shared Memory로 큰 데이터 덩어리를 옮기는 일만 전담하는 장치입니다.</li>
+    <li><b>해결하는 단점:</b> 스레드가 데이터 옮기기에 시간을 쓰지 않아서, Tensor Core가 기다리는 시간이 줄어듭니다.</li>
   </ul></div>
 </section>
 
 <section class="ch" id="s3-9">
   <div class="ch-head"><span class="ch-num">3.9</span><h2>대안과의 비교</h2></div>
-  <p class="prose">행렬 곱셈 전용 회로는 NVIDIA만 갖고 있는 게 아닙니다. 1회차 1.8에서 본 전용 AI 칩과 CPU 행렬 확장도 같은 발상에서 나왔습니다.</p>
+  <p class="prose">행렬 곱셈 전용 회로는 다른 칩에도 있습니다. 1회차 1.8의 AI 전용 칩, CPU 행렬 확장과 같은 발상입니다.</p>
   <div class="tbl"><table>
     <thead><tr><th>구분</th><th>NVIDIA Tensor Core</th><th>AMD Matrix Core</th><th>Google TPU (MXU)</th><th>Intel AMX</th></tr></thead>
     <tbody>
@@ -616,7 +709,7 @@
 <section class="ch" id="s3-10">
   <div class="ch-head"><span class="ch-num">3.10</span><h2>실무 관점</h2></div>
   <h3>1. 스펙 시트 읽는 법</h3>
-  <p class="prose">같은 H100 SXM인데도, 어떤 형식으로 계산하느냐에 따라 성능 숫자가 이렇게 달라집니다.</p>
+  <p class="prose">같은 H100 SXM이라도 형식에 따라 성능 숫자가 크게 다릅니다.</p>
   <div class="tbl"><table>
     <thead><tr><th>형식</th><th>담당</th><th>TFLOPS</th><th>희소성 포함 표기</th></tr></thead>
     <tbody>
@@ -626,7 +719,11 @@
       <tr><td>FP8</td><td>Tensor Core</td><td class="num">약 1,979</td><td class="num">약 3,958</td></tr>
     </tbody>
   </table></div>
-  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>성능 숫자를 볼 때는 두 가지를 꼭 확인합니다. 어느 정밀도 기준인지, 그리고 희소성이 포함된 숫자인지입니다.</b> 둘 다 확인하지 않으면 같은 칩도 최대 여덟 배 가까이 다르게 보일 수 있습니다.</div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>성능 숫자는 어느 정밀도 기준인지, 희소성이 포함됐는지를 꼭 함께 봅니다.</b> 둘을 놓치면 같은 칩도 여덟 배 가까이 다르게 보입니다.</div>
+  <details>
+    <summary>Q. 왜 스펙 시트는 희소성이 포함된 숫자를 앞세우나요?</summary>
+    <div class="prose"><p>낼 수 있는 최대값이라 더 빨라 보이기 때문입니다. 희소성 가속은 숫자 네 개 중 두 개가 0인 행렬에서만 되고, 대부분의 모델은 이 조건을 맞추지 않습니다. 비교할 때는 희소성을 뺀 숫자를 봅니다.</p></div>
+  </details>
 
   <h3>2. 세대별 레퍼런스</h3>
   <div class="tbl"><table>
@@ -640,29 +737,27 @@
     </tbody>
   </table></div>
 
-  <h3>3. 모니터링: Tensor Active 보기</h3>
+  <h3>3. 모니터링: Tensor Active</h3>
   <div class="prose"><ul>
-    <li>1.10에서 본 Tensor Active가 바로 Tensor Core 가동률입니다.</li>
-    <li>AI 학습인데 이 값이 낮다면, Tensor Core를 못 쓰는 형식(FP32)으로 돌고 있거나 데이터 공급이 막혀 있을 가능성이 큽니다. 먼저 혼합 정밀도 옵션이 켜져 있는지 확인해 보면 좋습니다.</li>
+    <li>1.10의 Tensor Active가 Tensor Core 가동률입니다.</li>
+    <li>AI 학습인데 이 값이 낮다면, FP32로만 돌고 있거나 데이터 공급이 막혀 있을 가능성이 큽니다. 먼저 혼합 정밀도 옵션이 켜져 있는지 확인합니다.</li>
   </ul></div>
-
 </section>
 
 <!-- ============ PART 4 : Occupancy ============ -->
 <div class="part" id="p4">
   <div class="pk">PART 4</div>
   <h2>Occupancy (점유율)</h2>
-  <p>여기까지 팀과 팀원, 그리고 표 계산 기계를 봤습니다. 마지막으로, 그 팀을 얼마나 꽉 채워서 일하고 있는지 재는 Occupancy, 우리말로 점유율을 보겠습니다.</p>
+  <p>여기까지 SM, CUDA Core, Tensor Core를 봤습니다. 마지막으로 SM을 얼마나 채워 쓰는지 재는 Occupancy, 우리말로 점유율을 보겠습니다.</p>
 </div>
 
 <section class="ch" id="s4-1">
   <div class="ch-head"><span class="ch-num">4.1</span><h2>정의</h2></div>
-  <p class="lead"><button class="t" data-t="occupancy">Occupancy</button>는 <b>SM 하나에 실제로 대기 중인 조 수를, 최대로 들어갈 수 있는 조 수로 나눈 값</b>입니다. 회사 비유로는 팀 사무실 자리 중 몇 자리가 차 있느냐입니다.</p>
+  <p class="lead"><button class="t" data-t="occupancy">Occupancy</button>는 <b>SM에 실제로 대기 중인 warp 수를 최대 warp 수로 나눈 값</b>입니다.</p>
   <div class="prose">
     <ul>
-      <li>H100은 SM 하나에 최대 64개 조가 들어갑니다. 스레드로 치면 2,048개입니다.</li>
-      <li>예를 들어 32개 조가 대기 중이면 점유율은 50%입니다.</li>
-      <li>점유율이 보여 주는 것은 기다림을 숨길 때 쓸 수 있는 후보 조의 수입니다. 계산 장치가 실제로 바빴는지는 따로 봐야 합니다.</li>
+      <li>H100은 SM 하나에 최대 64개 warp, 스레드로는 2,048개가 들어갑니다. 32개가 대기 중이면 50%입니다.</li>
+      <li>점유율은 기다림을 숨길 후보 warp가 몇 개인지를 보여 줍니다. 계산 장치가 실제로 바빴는지는 따로 봐야 합니다.</li>
     </ul>
   </div>
 </section>
@@ -671,72 +766,72 @@
   <div class="ch-head"><span class="ch-num">4.2</span><h2>등장 배경</h2></div>
   <div class="prose">
     <ul>
-      <li>1.4에서 본 것처럼, 창고에서 재료를 가져오는 데는 수백 사이클이 걸립니다.</li>
-      <li>GPU는 그동안 다른 조에게 일을 시켜 기다림을 숨깁니다. 그러려면 대기 중인 조가 충분히 있어야 합니다.</li>
-      <li>그런데 팀 자원이 한정돼 있어서, 프로그램을 어떻게 짜느냐에 따라 들어갈 수 있는 조 수가 크게 달라졌습니다.</li>
+      <li>1.4에서 본 것처럼, VRAM을 기다리는 동안 다른 warp를 실행하려면 대기 중인 warp가 충분해야 합니다.</li>
+      <li>그런데 SM 자원이 한정돼 있어서, 코드에 따라 올라갈 수 있는 warp 수가 크게 달라졌습니다.</li>
     </ul>
   </div>
   <div class="callout idea">
-    <span class="say">"그럼 팀 자리가 얼마나 찼는지를 숫자로 재자!"</span>
+    <span class="say">"그럼 SM이 얼마나 찼는지를 숫자로 재자!"</span>
     그렇게 자리 잡은 기준이 바로 <b>Occupancy</b>입니다.
     <ul>
-      <li>NVIDIA는 CUDA 초기부터 점유율을 미리 계산해 보는 엑셀 계산기를 배포했습니다.</li>
-      <li>지금은 이 기능이 분석 도구인 <button class="t" data-t="nsight">Nsight Compute</button> 안에 들어 있습니다.</li>
+      <li>NVIDIA는 CUDA 초기부터 점유율 계산용 엑셀 시트를 배포했고, 지금은 이 기능이 <button class="t" data-t="nsight">Nsight Compute</button>에 들어 있습니다.</li>
     </ul>
   </div>
 </section>
 
 <section class="ch" id="s4-3">
   <div class="ch-head"><span class="ch-num">4.3</span><h2>구조</h2></div>
-  <h3>1. 점유율을 정하는 네 가지 한도</h3>
-  <p class="prose">SM 하나에 들어갈 수 있는 블록 수는 네 가지 한도 중 가장 빡빡한 것으로 정해집니다. 자리, 과제 수, 메모지, 책상이라고 생각하면 됩니다.</p>
+  <p class="prose">SM에 올라갈 수 있는 블록 수는 아래 네 한도 중 가장 빡빡한 것이 정합니다.</p>
   <div class="tbl"><table>
-    <thead><tr><th>한도</th><th>회사 비유</th><th>H100 SM 1개당</th></tr></thead>
+    <thead><tr><th>한도</th><th>H100 SM 1개당</th></tr></thead>
     <tbody>
-      <tr><td>조(warp) 수</td><td>사무실 자리</td><td>최대 64개 (2,048 스레드)</td></tr>
-      <tr><td>블록 수</td><td>동시에 맡을 수 있는 과제 수</td><td>최대 32개</td></tr>
-      <tr><td>레지스터</td><td>팀원들이 나눠 쓰는 메모지 묶음</td><td>65,536개 (256KB)</td></tr>
-      <tr><td>Shared Memory</td><td>팀 공용 책상</td><td>최대 228KB</td></tr>
+      <tr><td>warp 수</td><td>최대 64개 (2,048 스레드)</td></tr>
+      <tr><td>블록 수</td><td>최대 32개</td></tr>
+      <tr><td>레지스터</td><td>65,536개 (256KB)</td></tr>
+      <tr><td>Shared Memory</td><td>최대 228KB</td></tr>
     </tbody>
   </table></div>
-  <h3>2. 이론 점유율과 실제 점유율</h3>
   <div class="prose"><ul>
-    <li><b>이론 점유율:</b> 위 한도로 계산한 최댓값입니다. 실행하기 전에 알 수 있습니다.</li>
-    <li><b>실제 점유율:</b> 실행 중에 측정한 평균입니다. 보통 이론값보다 낮습니다.</li>
+    <li><b>이론 점유율:</b> 위 한도로 계산한 최댓값입니다.</li>
+    <li><b>실제 점유율:</b> 실행 중 측정한 평균으로, 보통 이론값보다 낮습니다.</li>
   </ul></div>
 </section>
 
 <section class="ch" id="s4-4">
   <div class="ch-head"><span class="ch-num">4.4</span><h2>작동 방식</h2></div>
-  <p class="prose">점유율을 가장 자주 떨어뜨리는 건 메모지, 즉 레지스터입니다. SM 하나의 레지스터 65,536개를 모든 스레드가 나눠 써야 하기 때문입니다. 스레드 하나가 레지스터를 몇 개 쓰느냐에 따라 이렇게 달라집니다.</p>
+  <p class="prose">가장 흔한 원인은 레지스터입니다. SM의 레지스터 65,536개를 모든 스레드가 나눠 씁니다.</p>
   <div class="prose">
     <ol>
-      <li><b>32개를 쓰면:</b> 65,536 나누기 32, 스레드 2,048개가 들어갑니다. 64개 조, 점유율 100%입니다.</li>
-      <li><b>64개를 쓰면:</b> 스레드 1,024개, 32개 조가 들어가서 50%입니다.</li>
-      <li><b>128개를 쓰면:</b> 스레드 512개, 16개 조가 들어가서 25%입니다.</li>
+      <li><b>스레드당 32개:</b> 스레드 2,048개가 들어가서 64개 warp, 점유율 100%입니다.</li>
+      <li><b>스레드당 64개:</b> 스레드 1,024개, 32개 warp가 들어가서 50%입니다.</li>
+      <li><b>스레드당 128개:</b> 스레드 512개, 16개 warp가 들어가서 25%입니다.</li>
     </ol>
-    <p>정리하면, 한 명이 메모지를 두 배로 쓰면 들어올 수 있는 사람이 절반으로 줄어듭니다.</p>
+    <p>스레드 하나가 레지스터를 두 배로 쓰면, 들어갈 수 있는 스레드는 절반이 됩니다.</p>
   </div>
   <figure class="fig">
-    <div class="fig-title">점유율 계산해 보기 (블록 하나 = 256 스레드 = 조 8개)</div>
+    <div class="fig-title">점유율 계산해 보기 (블록 하나 = 256 스레드 = warp 8개)</div>
     <div class="seg" id="o-reg" aria-label="스레드당 레지스터"></div>
     <div class="seg" id="o-smem" aria-label="블록당 Shared Memory"></div>
     <div class="split">
-      <div class="scroll-x"><svg id="oSvg" viewBox="0 0 330 200" width="100%" role="img" aria-label="SM 하나의 조 자리 64칸 중 채워진 칸"></svg></div>
+      <div class="scroll-x"><svg id="oSvg" viewBox="0 0 330 200" width="100%" role="img" aria-label="SM 하나의 warp 자리 64칸 중 채워진 칸"></svg></div>
       <div class="panel" id="oPanel" aria-live="polite"></div>
     </div>
-    <div class="legend"><span><i class="sw" style="background:var(--accent)"></i>대기 중인 조</span><span><i class="sw" style="background:var(--idle)"></i>빈자리</span></div>
-    <figcaption>단순화한 예시입니다. 세로 한 줄이 블록 하나(조 8개)입니다. 실제로는 레지스터를 일정 단위로 묶어 배정하는 등의 세부 규칙 때문에 값이 조금 다를 수 있습니다.</figcaption>
+    <div class="legend"><span><i class="sw" style="background:var(--accent)"></i>대기 중인 warp</span><span><i class="sw" style="background:var(--idle)"></i>빈자리</span></div>
+    <figcaption>단순화한 예시입니다. 세로 한 줄이 블록 하나(warp 8개)입니다. 실제로는 레지스터를 일정 단위로 묶어 배정하는 등의 세부 규칙 때문에 값이 조금 다를 수 있습니다.</figcaption>
   </figure>
+  <details>
+    <summary>Q. 왜 블록의 스레드 수를 32의 배수로 잡나요?</summary>
+    <div class="prose"><p>GPU는 warp, 즉 32개 스레드 단위로 실행합니다. 블록을 100개 스레드로 잡으면 warp 4개가 필요하고, 마지막 warp는 32칸 중 4칸만 일합니다. 나머지 28칸은 자리만 차지합니다.</p></div>
+  </details>
 </section>
 
 <section class="ch" id="s4-5">
   <div class="ch-head"><span class="ch-num">4.5</span><h2>이점</h2></div>
   <div class="prose">
     <ul>
-      <li><b>기다림을 숨기기 쉬워집니다:</b> 대기 조가 많을수록, 한 조가 멈춰도 바로 다른 조가 일합니다.</li>
-      <li><b>미리 계산할 수 있습니다:</b> 실행하기 전에 블록 크기와 자원 사용량만으로 이론값을 구할 수 있습니다.</li>
-      <li><b>성능 진단의 출발점이 됩니다:</b> 느린 커널을 볼 때, 자리가 비어서 기다림을 못 숨기는 건지 가장 먼저 확인할 수 있습니다.</li>
+      <li><b>기다림을 숨기기 쉬워집니다:</b> 대기 warp가 많을수록, 한 warp가 멈춰도 다른 warp가 바로 실행됩니다.</li>
+      <li><b>미리 계산할 수 있습니다:</b> 실행 전에 블록 크기와 자원 사용량만으로 이론값을 구합니다.</li>
+      <li><b>진단의 출발점이 됩니다:</b> 느린 커널에서 SM이 비어서 기다림을 못 숨기는지 먼저 확인할 수 있습니다.</li>
     </ul>
   </div>
 </section>
@@ -746,9 +841,9 @@
   <p class="prose">점유율이라는 기준이 없다고 가정해 보면, 이런 문제가 생깁니다.</p>
   <div class="prose">
     <ul>
-      <li>왜 느린지 짐작만 하게 됩니다. 메모리를 기다려서인지, 자리가 비어서인지 구분하기 어렵습니다.</li>
+      <li>메모리를 기다려서 느린지, SM이 비어서 느린지 구분하기 어렵습니다.</li>
       <li>블록 크기와 자원 사용량을 감으로 정하게 됩니다.</li>
-      <li>운영 중인 GPU를 얼마나 깊게 쓰고 있는지 볼 방법이 줄어듭니다.</li>
+      <li>운영 중인 GPU를 얼마나 깊게 쓰는지 볼 방법이 줄어듭니다.</li>
     </ul>
   </div>
 </section>
@@ -757,52 +852,62 @@
   <div class="ch-head"><span class="ch-num">4.7</span><h2>단점</h2></div>
   <div class="prose">
     <ul>
-      <li><b>높다고 항상 빠른 건 아닙니다:</b> 행렬 곱셈처럼 데이터를 메모지에 오래 두고 여러 번 재사용하는 작업은, 점유율이 낮아도 빠릅니다. 1.10 지표 그림의 "큰 행렬 곱셈"이 그 예입니다.</li>
-      <li><b>억지로 올리면 역효과가 납니다:</b> 레지스터를 줄여 점유율을 올리면, 모자란 값을 느린 메모리에 내려놓게 됩니다. 이걸 <button class="t" data-t="spill">레지스터 넘침</button>이라고 부르고, 오히려 느려집니다.</li>
-      <li><b>이론값과 실제값이 다릅니다:</b> 블록마다 끝나는 시간이 다르고, 마지막 차례에는 자리가 비기 때문입니다.</li>
-      <li><b>SM 하나 안만 봅니다:</b> SM 132개 중 몇 개가 놀고 있는지는 점유율로 알 수 없습니다. 이건 4.8의 wave로 봅니다.</li>
+      <li><b>높다고 항상 빠른 건 아닙니다:</b> 행렬 곱셈처럼 데이터를 레지스터에 오래 두고 재사용하는 작업은 점유율이 낮아도 빠릅니다.</li>
+      <li><b>억지로 올리면 역효과가 납니다:</b> 레지스터를 줄여 점유율을 올리면, 모자란 값을 느린 메모리에 내려놓게 됩니다. 이걸 <button class="t" data-t="spill">레지스터 넘침</button>이라고 합니다.</li>
+      <li><b>이론값과 실제값이 다릅니다:</b> 블록마다 끝나는 시간이 다르고, 마지막 차례에는 SM이 비기 때문입니다.</li>
+      <li><b>SM 하나 안만 봅니다:</b> SM 132개 중 몇 개가 노는지는 알 수 없습니다. 4.8의 wave로 봅니다.</li>
     </ul>
   </div>
+  <details>
+    <summary>Q. 왜 점유율이 높은데 느리고, 낮은데 빠를 수 있나요?</summary>
+    <div class="prose">
+      <p>점유율은 후보 warp가 몇 개인지만 보여 줍니다.</p>
+      <ul>
+        <li>계산 위주 작업은 이미 계산 장치가 바빠서 후보가 많이 필요 없습니다. 점유율이 낮아도 빠릅니다.</li>
+        <li>메모리 대역폭이 꽉 막힌 작업은 후보가 많아도 다 같이 데이터를 기다립니다. 점유율이 높아도 느립니다.</li>
+      </ul>
+    </div>
+  </details>
 </section>
 
 <section class="ch" id="s4-8">
   <div class="ch-head"><span class="ch-num">4.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
   <h3>1. Wave 맞추기</h3>
   <div class="prose"><ul>
-    <li><b>뜻:</b> 일감이 GPU가 한 번에 받을 수 있는 양보다 많으면 여러 차례로 나눠 처리합니다. 이 한 차례가 <button class="t" data-t="wave">wave</button>입니다. 블록 수를 SM 수의 배수에 가깝게 맞추면 마지막 차례에 노는 SM이 줄어듭니다.</li>
-    <li><b>해결하는 단점:</b> SM 하나 안만 보는 점유율이 놓치는, GPU 전체의 빈자리를 줄입니다.</li>
+    <li><b>뜻:</b> 블록이 GPU가 한 번에 받을 수 있는 양보다 많으면 여러 차례로 나눠 처리하는데, 이 한 차례가 <button class="t" data-t="wave">wave</button>입니다. 블록 수를 SM 수의 배수에 가깝게 맞추면 마지막 차례에 노는 SM이 줄어듭니다.</li>
+    <li><b>해결하는 단점:</b> 점유율이 못 보는 GPU 전체의 빈자리를 줄입니다.</li>
   </ul></div>
   <figure class="fig">
-    <div class="fig-title">SM 132개에 과제(블록) 133개를 맡기면</div>
+    <div class="fig-title">SM 132개에 블록 133개를 맡기면</div>
     <div class="scroll-x"><svg id="waveSvg" width="100%" role="img" aria-label="1차에 SM 132개가 모두 일하고, 2차에는 SM 1개만 일하는 그림"></svg></div>
     <div class="legend"><span><i class="sw" style="background:var(--accent)"></i>일하는 SM</span><span><i class="sw" style="background:var(--idle)"></i>노는 SM</span></div>
-    <figcaption>1차에 132개를 처리하고, 2차에는 SM 1개만 일하고 131개는 놉니다. 시간은 두 배 걸리는데 효율은 50% 정도입니다. 반대로 과제가 64개뿐이면 SM 68개는 아예 일을 받지 못합니다.</figcaption>
+    <figcaption>1차에 132개를 처리하고, 2차에는 SM 1개만 일합니다. 시간은 두 배인데 효율은 50% 정도입니다.</figcaption>
   </figure>
-  <h3>2. 한 조가 여러 계산을 이어서 내보내기 (<button class="t" data-t="ilp">ILP</button>)</h3>
+  <h3>2. <button class="t" data-t="ilp">ILP</button> (warp 하나가 여러 계산을 이어서 내보내기)</h3>
   <div class="prose"><ul>
-    <li><b>뜻:</b> 조 하나가 서로 상관없는 계산 여러 개를 이어서 내보내, 하나를 기다리는 동안 다른 계산을 진행하는 기법입니다.</li>
-    <li><b>해결하는 단점:</b> 점유율이 낮아도 기다림을 숨길 수 있습니다. 행렬 곱셈 라이브러리가 낮은 점유율에서도 빠른 이유입니다.</li>
+    <li><b>뜻:</b> warp 하나가 서로 상관없는 계산 여러 개를 연달아 내보내, 하나를 기다리는 동안 다른 계산을 진행합니다.</li>
+    <li><b>해결하는 단점:</b> 점유율이 낮아도 기다림을 숨깁니다. 행렬 곱셈 라이브러리가 낮은 점유율에서도 빠른 이유입니다.</li>
   </ul></div>
   <h3>3. 레지스터 상한 지정</h3>
   <div class="prose"><ul>
-    <li><b>뜻:</b> 컴파일러에게 "스레드 하나당 레지스터를 이만큼만 써라"라고 알려 주는 옵션입니다.</li>
-    <li><b>해결하는 단점:</b> 점유율을 원하는 수준으로 조절할 수 있습니다. 대신 레지스터 넘침이 생기지 않는지 함께 확인해야 합니다.</li>
+    <li><b>뜻:</b> 컴파일러에 스레드당 레지스터 상한을 알려 주는 옵션입니다.</li>
+    <li><b>해결하는 단점:</b> 점유율을 원하는 수준으로 조절합니다. 레지스터 넘침이 생기지 않는지 함께 봐야 합니다.</li>
   </ul></div>
-  <h3>4. Nsight Compute로 원인 보기</h3>
+  <h3>4. Nsight Compute</h3>
   <div class="prose"><ul>
-    <li><b>뜻:</b> 커널 하나를 자세히 분석하는 NVIDIA 도구입니다. 이론 점유율, 실제 점유율, 그리고 네 가지 한도 중 무엇이 점유율을 막았는지 보여 줍니다.</li>
-    <li><b>해결하는 단점:</b> 점유율 숫자 하나만 보고 판단하는 문제를 줄여 줍니다.</li>
+    <li><b>뜻:</b> 커널 하나를 자세히 분석하는 NVIDIA 도구입니다. 이론·실제 점유율과 어느 한도가 막았는지 보여 줍니다.</li>
+    <li><b>해결하는 단점:</b> 점유율 숫자 하나만 보고 판단하는 문제를 줄입니다.</li>
   </ul></div>
 </section>
 
 <section class="ch" id="s4-9">
   <div class="ch-head"><span class="ch-num">4.9</span><h2>대안과의 비교</h2></div>
-  <p class="prose">점유율과 헷갈리기 쉬운 지표들을 한 표에 모았습니다.</p>
+  <p class="prose">점유율과 헷갈리기 쉬운 지표들입니다.</p>
   <div class="tbl"><table>
     <thead><tr><th>지표</th><th>재는 것</th><th>범위</th><th>어디서 보나</th></tr></thead>
     <tbody>
-      <tr><td>이론 점유율</td><td>자원 한도로 계산한 최대 대기 조 비율</td><td>커널 하나</td><td>Nsight Compute, 직접 계산</td></tr>
-      <tr><td>실제 점유율</td><td>실행 중 실제 대기 조 비율</td><td>커널 하나</td><td>Nsight Compute</td></tr>
+      <tr><td>이론 점유율</td><td>자원 한도로 계산한 최대 대기 warp 비율</td><td>커널 하나</td><td>Nsight Compute, 직접 계산</td></tr>
+      <tr><td>실제 점유율</td><td>실행 중 실제 대기 warp 비율</td><td>커널 하나</td><td>Nsight Compute</td></tr>
       <tr><td><button class="t" data-t="smocc">SM Occupancy</button></td><td>실행 중 점유율의 GPU 전체 평균</td><td>GPU 전체, 시간 평균</td><td>DCGM</td></tr>
       <tr><td><button class="t" data-t="smactive">SM Active</button></td><td>일감을 받은 SM의 비율</td><td>GPU 전체, 시간 평균</td><td>DCGM</td></tr>
       <tr><td><button class="t" data-t="gpuutil">GPU-Util</button></td><td>작업이 하나라도 돌았던 시간 비율</td><td>GPU 전체</td><td>nvidia-smi</td></tr>
@@ -814,18 +919,27 @@
   <div class="ch-head"><span class="ch-num">4.10</span><h2>실무 관점</h2></div>
   <h3>1. 목표치</h3>
   <div class="prose"><ul>
-    <li>정답 숫자는 없습니다. 행렬 곱셈 같은 계산 위주 작업은 점유율 25% 안팎에서도 충분히 빠를 수 있습니다.</li>
-    <li>데이터를 읽고 쓰는 일이 많은 작업은 대체로 점유율이 높을수록 유리합니다.</li>
+    <li>정답 숫자는 없습니다. 계산 위주 작업은 25% 안팎에서도 충분히 빠를 수 있습니다.</li>
+    <li>데이터를 많이 읽고 쓰는 작업은 대체로 높을수록 유리합니다.</li>
   </ul></div>
   <h3>2. 확인 방법</h3>
   <div class="prose"><ul>
-    <li><b>개발 단계:</b> Nsight Compute로 커널별 이론값, 실제값, 막은 한도를 봅니다.</li>
-    <li><b>운영 단계:</b> DCGM의 SM Occupancy를 Grafana 대시보드로 봅니다. 1.10의 지표 그림에서 시나리오별로 어떻게 나오는지 확인할 수 있습니다.</li>
+    <li><b>개발 단계:</b> Nsight Compute로 커널별 이론값, 실제값, 막힌 한도를 봅니다.</li>
+    <li><b>운영 단계:</b> DCGM의 SM Occupancy를 Grafana로 봅니다.</li>
   </ul></div>
-  <h3>3. 지표를 보는 순서</h3>
-  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>GPU-Util, SM Active, SM Occupancy, Tensor Active 순서로 봅니다.</b> 일을 하고 있는지, 넓게 쓰는지, 깊게 쓰는지, 그리고 AI에 맞는 기계를 쓰는지를 차례로 확인하는 순서입니다.</div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>GPU-Util, SM Active, SM Occupancy, Tensor Active 순서로 봅니다.</b> 일을 하는지, 넓게 쓰는지, 깊게 쓰는지, Tensor Core를 쓰는지를 차례로 확인하는 순서입니다.</div>
 </section>
 
+<section class="ch" id="refs">
+  <div class="ch-head"><span class="ch-num">+</span><h2>참고</h2></div>
+  <div class="prose"><ul>
+    <li><a href="https://resources.nvidia.com/en-us-tensor-core" target="_blank" rel="noopener">NVIDIA H100 Tensor Core GPU Architecture</a></li>
+    <li><a href="https://docs.nvidia.com/cuda/cuda-c-programming-guide/" target="_blank" rel="noopener">NVIDIA CUDA C++ Programming Guide</a></li>
+    <li><a href="https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/" target="_blank" rel="noopener">CUDA C++ Best Practices Guide (Occupancy)</a></li>
+    <li><a href="https://docs.nvidia.com/nsight-compute/" target="_blank" rel="noopener">Nsight Compute Documentation</a></li>
+    <li><a href="https://docs.nvidia.com/datacenter/dcgm/latest/" target="_blank" rel="noopener">NVIDIA DCGM Documentation</a></li>
+  </ul></div>
+</section>
 
 <nav class="pager" id="pager" data-no="2" aria-label="회차 이동"></nav>
 </main>

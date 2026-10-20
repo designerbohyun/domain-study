@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>구조도 · 도메인 스터디</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.0.6/css/pico.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="assets/site.css">
+<script>try{var t=localStorage.getItem("theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+</head>
+<body data-root=".">
+<header class="site"><nav class="container">
+  <ul><li><a class="brand" href="./">도메인 스터디</a></li></ul>
+  <ul><li><a href="./">스터디 목차</a></li><li><a href="structure.html" aria-current="page">구조도</a></li><li><a href="glossary.html">용어 사전</a></li></ul>
+</nav></header>
+
+<main class="container">
+  <section class="hero">
+    <div class="eyebrow">모든 회차 공용</div>
+    <h1>구조도</h1>
+    <p>GPU 시스템을 바깥에서 안으로 확대해 보고, 각 칸에 어떤 용어가 속하는지 확인합니다. 칸을 누르면 그 칸을 이루는 것, 그 칸에서 일어나는 일, 그 칸을 재는 지표, 나눠 쓰는 법이 나옵니다. 용어로 찾으면 그 용어가 있는 칸으로 바로 갑니다. 기준 제품은 회차 자료와 같은 NVIDIA H100 SXM입니다.</p>
+  </section>
+  <div id="structure-app"></div>
+</main>
+
+<footer class="site"><div class="container">자료의 오류나 보충할 내용은 <a href="https://github.com/designerbohyun/domain-study/issues">GitHub 이슈</a>로 알려 주세요.</div></footer>
+<script src="assets/terms.js"></script>
+<script src="assets/sessions.js"></script>
+<script src="assets/site.js"></script>
+<script src="assets/structure.js"></script>
+</body>
+</html>

@@ -36,7 +36,7 @@
   function termCard(key, g, k, withId) {
     const find = !glossaryPage && inPage(key) ? `<button class="linkish" type="button" data-find="${key}">본문에서 찾기</button>` : "";
     return `<article${withId ? ` id="${key}"` : ""} data-key="${key}"><div class="c">${esc(g.c)}</div><h3>${mark(g.n, k.trim())}</h3><p>${mark(g.d, k.trim())}</p>
-      <div class="s"><span class="muted">나온 회차:</span> ${(g.s || []).map(sessionLink).join(", ") || "아직 없음"}${find ? " · " + find : ""}</div></article>`;
+      <div class="s"><span class="muted">나온 회차:</span> ${(g.s || []).map(sessionLink).join(", ") || "아직 없음"} · <a href="${root}/structure.html#t=${key}">구조도에서 위치 보기</a>${find ? " · " + find : ""}</div></article>`;
   }
 
   /* 테마 */
@@ -113,7 +113,9 @@
     const key = btn.dataset.t, g = T[key]; if (!g) return;
     anchor = btn;
     const more = drawer ? `<button class="linkish" type="button" data-open-term="${key}">용어 사전에서 보기</button>` : `<a href="${root}/glossary.html#${key}">용어 사전에서 보기</a>`;
-    pop.innerHTML = `<div class="pk">${esc(g.c)}</div><div class="pn">${esc(g.n)}</div><div>${esc(g.d)}</div><div class="pg">${more}</div>`;
+    const onStructure = document.getElementById("structure-app");
+    const loc = onStructure ? `<button class="linkish" type="button" data-locate="${key}">구조도에서 위치 보기</button>` : `<a href="${root}/structure.html#t=${key}">구조도에서 위치 보기</a>`;
+    pop.innerHTML = `<div class="pk">${esc(g.c)}</div><div class="pn">${esc(g.n)}</div><div>${esc(g.d)}</div><div class="pg">${more} · ${loc}</div>`;
     pop.hidden = false;
     const r = btn.getBoundingClientRect(), pw = pop.offsetWidth, ph = pop.offsetHeight;
     pop.style.left = Math.min(Math.max(16, r.left), innerWidth - pw - 16) + "px";

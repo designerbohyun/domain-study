@@ -610,7 +610,12 @@
     <thead><tr><th>구분</th><th>CUDA Core</th><th>Tensor Core</th></tr></thead>
     <tbody>
       <tr><td>하는 일</td><td>숫자 하나씩 계산</td><td>행렬 곱셈만</td></tr>
+      <tr><td>명령 한 번에</td><td>a × b + c 한 번</td><td>작은 행렬 A × B + C 한 덩어리</td></tr>
+      <tr><td>주로 쓰는 정밀도</td><td>FP32 · FP64 · INT32</td><td>FP16 · BF16 · TF32 · FP8 (합계는 FP32)</td></tr>
       <tr><td>H100 SXM 개수</td><td class="num">16,896개</td><td class="num">528개</td></tr>
+      <tr><td>H100 SXM 성능</td><td>FP32 약 67 TFLOPS</td><td>BF16 약 989 TFLOPS</td></tr>
+      <tr><td>처음 나온 세대</td><td>Fermi (2010)</td><td>Volta (2017)</td></tr>
+      <tr><td>AI 모델에서 맡는 일</td><td>활성화 함수, 정규화, softmax, 전처리</td><td>층마다의 행렬 곱셈, Attention의 곱셈</td></tr>
     </tbody>
   </table></div>
   <div class="prose"><ul><li>행렬 곱셈은 Tensor Core가, 나머지는 CUDA Core가 합니다.</li></ul></div>
@@ -620,6 +625,16 @@
     <div class="legend"><span><i class="sw" style="background:var(--accent)"></i>CUDA Core 결과</span><span><i class="sw" style="background:var(--tensor)"></i>Tensor Core 결과</span></div>
     <figcaption>Tensor Core 쪽은 4 × 4 행렬로 단순화한 예시입니다. 실제 행렬 크기와 곱셈 횟수는 세대와 정밀도마다 다릅니다.</figcaption>
   </figure>
+  <details>
+    <summary>Q. 한 모델 안에서 둘은 어떻게 나눠 일하나요?</summary>
+    <div class="prose"><p>층 하나를 계산할 때 두 유닛이 번갈아 일합니다. 행렬 곱셈은 Tensor Core가 하고, 그 사이의 일은 CUDA Core가 합니다. 어느 쪽을 쓸지는 PyTorch가 부르는 cuBLAS와 cuDNN이 정합니다.</p></div>
+    <figure class="fig"><pre class="mermaid">flowchart LR
+  I["입력"] --> T1["가중치와 곱하기&lt;br&gt;Tensor Core"]
+  T1 --> C1["활성화 함수 · 정규화&lt;br&gt;CUDA Core"]
+  C1 --> T2["다음 층 곱하기&lt;br&gt;Tensor Core"]
+  T2 --> C2["softmax 등&lt;br&gt;CUDA Core"]
+  C2 --> O["출력"]</pre></figure>
+  </details>
 </section>
 
 <section class="ch" id="s3-4">
@@ -811,6 +826,69 @@
 
 <section class="ch" id="s4-2">
   <div class="ch-head"><span class="ch-num">4.2</span><h2>등장 배경</h2></div>
+  <p class="prose">점유율을 이해하려면 먼저 지연이라는 개념을 알아야 합니다. 점유율은 결국 지연을 얼마나 숨길 수 있느냐를 보는 값이기 때문입니다.</p>
+  <h3>1. 지연이란</h3>
+  <div class="prose"><ul>
+    <li><button class="t" data-t="lat">지연</button>, 영어로 latency는 <b>일을 시킨 뒤 결과가 돌아올 때까지 기다리는 시간</b>입니다.</li>
+    <li>GPU에서는 보통 사이클 수로 잽니다. H100은 한 사이클이 약 0.5나노초입니다. 1.4에서 본 값입니다.</li>
+    <li>warp는 다음 명령에 앞 명령의 결과가 필요하면, 그 결과가 올 때까지 멈춰서 기다립니다.</li>
+    <li>지연은 대역폭과 다릅니다. 지연은 한 번 다녀오는 데 걸리는 시간이고, 대역폭은 일정 시간에 나를 수 있는 양입니다. 둘의 관계는 6회차에서 자세히 다룹니다.</li>
+  </ul></div>
+  <h3>2. 지연은 얼마나 길까</h3>
+  <p class="prose">일의 종류에 따라 지연이 크게 다릅니다. 메모리가 계산 유닛에서 멀수록 길어집니다. 5회차에서 메모리마다 자세히 봅니다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>하는 일</th><th>대략의 지연 (H100)</th><th>시간으로 바꾸면</th></tr></thead>
+    <tbody>
+      <tr><td>CUDA Core의 곱하고 더하기 (FMA)</td><td>약 4 사이클</td><td>약 2나노초</td></tr>
+      <tr><td>레지스터 읽기</td><td>사실상 바로</td><td>—</td></tr>
+      <tr><td>Shared Memory 읽기</td><td>수십 사이클</td><td>수십 나노초 이내</td></tr>
+      <tr><td>L2 캐시 읽기</td><td>약 200 사이클</td><td>약 100나노초</td></tr>
+      <tr><td>VRAM 읽기</td><td>수백 사이클 (예시로 500)</td><td>수백 나노초</td></tr>
+    </tbody>
+  </table></div>
+  <div class="prose"><ul>
+    <li>측정 방법에 따라 다른 대략값입니다. 중요한 것은 자릿수입니다. VRAM을 한 번 기다리는 동안 FMA를 백 번 넘게 할 수 있습니다.</li>
+  </ul></div>
+  <h3>3. 지연을 숨기는 법</h3>
+  <div class="prose"><ul>
+    <li>CPU는 기다림 자체를 줄입니다. 큰 캐시를 두고, 다음에 쓸 데이터를 미리 가져옵니다.</li>
+    <li>GPU는 기다림을 줄이기보다 가립니다. warp 하나가 기다리는 동안 Warp Scheduler가 다른 warp를 실행합니다. 이걸 지연 은닉이라고 합니다. 1.4에서 본 내용입니다.</li>
+    <li>그런데 가리려면, 기다리는 동안 바로 실행할 수 있는 warp가 충분히 남아 있어야 합니다.</li>
+  </ul></div>
+  <figure class="fig"><pre class="mermaid">sequenceDiagram
+  participant S as Warp Scheduler
+  participant A as warp A
+  participant B as warp B
+  participant C as warp C
+  S->>A: 계산 명령
+  A->>A: VRAM 요청 후 기다림 (수백 사이클)
+  S->>B: 그동안 warp B 실행
+  B->>B: B도 VRAM 요청 후 기다림
+  S->>C: warp C 실행
+  Note over S: 실행할 warp가 떨어지면&lt;br&gt;Scheduler도 놀게 됩니다
+  A-->>S: 데이터 도착, A 다시 실행 가능</pre></figure>
+  <h3>4. warp가 몇 개 필요할까</h3>
+  <div class="prose"><ul>
+    <li>필요한 warp 수는 "기다리는 시간"을 "warp 하나가 기다리기 전에 할 수 있는 일의 시간"으로 나눈 값과 비슷합니다.</li>
+    <li>예를 들어 warp 하나가 계산 명령 10개를 실행하고 VRAM을 500 사이클 기다린다고 해 보겠습니다. 예시입니다.</li>
+  </ul></div>
+  <div class="prose"><ol>
+    <li><b>필요한 수:</b> Warp Scheduler 하나가 쉬지 않으려면 500 나누기 10, 약 50개의 warp가 번갈아 있어야 합니다.</li>
+    <li><b>실제 한도:</b> H100의 SM 하나는 warp 64개를 받고, Warp Scheduler가 4개라서 하나당 최대 16개입니다.</li>
+    <li><b>결과:</b> 점유율 100%여도 16개로는 160 사이클만 가립니다. 나머지 시간에는 Scheduler가 놉니다.</li>
+    <li><b>해결:</b> 그래서 warp 수만 늘리지 않고, 메모리에 덜 가거나 warp 하나가 기다리기 전에 더 많은 일을 하게 만듭니다. 4.8의 ILP와 5회차의 Shared Memory가 그 방법입니다.</li>
+  </ol></div>
+  <figure class="fig"><pre class="mermaid">flowchart LR
+  L["기다리는 시간&lt;br&gt;예: 500 사이클"] --> N["필요한 warp 수&lt;br&gt;500 ÷ 10 = 약 50개"]
+  W["warp 하나의 일&lt;br&gt;예: 계산 10 사이클"] --> N
+  N --> H["Scheduler 하나의 한도&lt;br&gt;H100은 16개"]
+  H --> R["모자라면 Scheduler가 놀게 됩니다"]</pre></figure>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>기다리는 시간이 길수록, 또 warp 하나의 일이 짧을수록 더 많은 warp가 필요합니다.</b> SM에 warp가 얼마나 올라가 있는지가 바로 점유율입니다.</div>
+  <details>
+    <summary>Q. 이 계산에 이름이 있나요?</summary>
+    <div class="prose"><p>리틀의 법칙이라고 합니다. 동시에 진행 중인 일의 수는, 처리하는 속도 곱하기 한 일에 걸리는 시간과 같다는 관계입니다. GPU에서는 "지연을 숨기려면 그만큼 많은 일을 동시에 걸어 두어야 한다"는 뜻으로 씁니다.</p></div>
+  </details>
+  <h3>5. 그래서 생긴 문제</h3>
   <div class="prose">
     <ul>
       <li>GPU는 warp 하나가 기다리는 동안 다른 warp를 실행합니다. 그래서 SM에 warp가 많이 올라가 있어야 합니다.</li>

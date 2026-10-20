@@ -4,7 +4,7 @@ window.SESSIONS = [
   { no: 2,  track: "GPU 기본 구조",      topics: "SM, CUDA Core, Tensor Core, Occupancy", meet: "2026-10-15", page: "sessions/02.html" },
   { no: 3,  track: "GPU 기본 구조",      topics: "Kernel, Thread, Block, Grid, Warp", meet: "2026-10-20", page: "sessions/03.html" },
   { no: 4,  track: "GPU 기본 구조",      topics: "FP32, FP16, BF16, FP8, INT8", meet: "2026-10-22" },
-  { no: 5,  track: "GPU 메모리",         topics: "HBM, VRAM, Global·Shared Memory, Register, L1·L2 Cache", meet: "2026-10-27" },
+  { no: 5,  track: "GPU 메모리",         topics: "HBM, VRAM, Global·Shared Memory, Register, L1·L2 Cache", meet: "2026-10-27", page: "sessions/05.html" },
   { no: 6,  track: "GPU 메모리",         topics: "Bandwidth, Latency, Coalesced Access, Unified·Pinned Memory", meet: "2026-10-29" },
   { no: 7,  track: "CPU-GPU 연결",       topics: "PCIe, Lane, Gen4·5·6, Host Memory", meet: "2026-11-03" },
   { no: 8,  track: "CPU-GPU 연결",       topics: "NUMA, DMA, BAR, CPU Bottleneck", meet: "2026-11-05" },

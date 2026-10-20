@@ -1,0 +1,804 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>5회차 · GPU 메모리 · 도메인 스터디</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.0.6/css/pico.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="../assets/site.css">
+<script>try{var t=localStorage.getItem("theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+</head>
+<body data-root="..">
+<header class="site"><nav class="container">
+  <ul><li><a class="brand" href="../">도메인 스터디</a></li></ul>
+  <ul><li><a href="../">스터디 목차</a></li><li><a href="../glossary.html">용어 사전</a></li></ul>
+</nav></header>
+
+<div class="container doc">
+<aside class="toc"><details open><summary>이 회차 목차</summary><ol id="toc"></ol></details></aside>
+<main>
+<header class="doc-head">
+  <div class="crumb"><a href="../">스터디 목차</a> / GPU 메모리 / 5회차</div>
+  <h1>5회차 · HBM, VRAM, Global·Shared Memory, Register, L1·L2 Cache</h1>
+  <p>지난 4회차에서는 숫자 하나를 몇 비트로 저장하는지 봤습니다. 오늘은 그 숫자들이 머무는 곳, GPU 메모리 안으로 들어가 보겠습니다.</p><p>GPU 메모리는 한 덩어리가 아닙니다. 계산 유닛에서 가까울수록 빠르고 작고, 멀수록 느리고 큽니다. 오늘 볼 네 가지가 이 계층의 각 칸입니다. 기준 제품은 지난 회차와 같이 NVIDIA <button class="t" data-t="h100">H100</button> SXM입니다.</p>
+  <div class="flow" aria-label="주제별 진행 순서">
+    <span><b>1</b>정의</span><span><b>2</b>등장 배경</span><span><b>3</b>구조</span><span><b>4</b>작동 방식</span><span><b>5</b>이점</span><span><b>6</b>부재 시 문제</span><span><b>7</b>단점</span><span><b>8</b>대안 기술</span><span><b>9</b>대안과의 비교</span><span><b>10</b>최신 트렌드</span>
+  </div>
+</header>
+
+<section class="ch" id="s0">
+  <div class="ch-head"><span class="ch-num">0</span><h2>메모리 계층 한눈에 보기</h2></div>
+  <figure class="fig"><pre class="mermaid">flowchart TB
+  R["Register&lt;br&gt;스레드 하나 전용 · SM당 256KB&lt;br&gt;약 1 사이클"]
+  S["Shared Memory · L1 Cache&lt;br&gt;SM 안 · 합쳐서 SM당 256KB&lt;br&gt;수십 사이클"]
+  L2["L2 Cache&lt;br&gt;모든 SM이 공유 · 50MB&lt;br&gt;약 200 사이클"]
+  V["VRAM = Global Memory (HBM3)&lt;br&gt;80GB · 3.35TB/s&lt;br&gt;수백 사이클"]
+  H["Host Memory (CPU 쪽)&lt;br&gt;7회차에서 다룹니다"]
+  R --&gt; S --&gt; L2 --&gt; V -.-&gt;|PCIe| H</pre></figure>
+  <div class="tbl"><table>
+    <thead><tr><th>계층</th><th>위치</th><th>누가 함께 쓰나</th><th>H100 SXM 크기</th><th>누가 관리하나</th></tr></thead>
+    <tbody>
+      <tr><td><button class="t" data-t="register">Register</button></td><td>SM 안</td><td>스레드 하나</td><td>SM당 256KB, 전체 약 33MB</td><td>컴파일러</td></tr>
+      <tr><td>Shared Memory</td><td>SM 안 (L1과 같은 공간)</td><td>같은 블록의 스레드</td><td>SM당 최대 228KB</td><td>프로그래머</td></tr>
+      <tr><td>L1 Cache</td><td>SM 안</td><td>그 SM의 스레드</td><td>Shared Memory와 합쳐 SM당 256KB</td><td>하드웨어</td></tr>
+      <tr><td>L2 Cache</td><td>칩 안</td><td>모든 SM</td><td>50MB</td><td>하드웨어, 일부 지정 가능</td></tr>
+      <tr><td>VRAM (HBM3)</td><td>칩 옆, 같은 패키지</td><td>모든 SM, 커널이 끝나도 유지</td><td>80GB, 3.35TB/s</td><td>프로그래머가 할당</td></tr>
+    </tbody>
+  </table></div>
+  <p class="prose">※ 사이클 수는 측정 방법과 세대에 따라 다른 대략값입니다.</p>
+</section>
+
+<!-- ============ PART 1 ============ -->
+<div class="part" id="p1">
+  <div class="pk">PART 1</div>
+  <h2>VRAM과 HBM (Video RAM · High Bandwidth Memory)</h2>
+  <p>가장 바깥, 가장 큰 칸부터 보겠습니다. 모델과 데이터가 처음 올라가는 곳입니다.</p>
+</div>
+
+<section class="ch" id="s1-1">
+  <div class="ch-head"><span class="ch-num">1.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="vram">VRAM</button>은 <b>GPU가 혼자 쓰는 메인 메모리</b>이고, HBM은 <b>데이터센터 GPU가 VRAM을 만드는 방식</b>입니다.</p>
+  <div class="prose"><ul>
+    <li>모델 가중치, 계산 중간값, KV 캐시처럼 GPU가 계산할 모든 데이터가 VRAM에 올라가야 합니다.</li>
+    <li>VRAM은 역할의 이름이고, HBM과 GDDR은 그 VRAM을 만드는 기술의 이름입니다. 게이밍 GPU는 GDDR, 데이터센터 GPU는 HBM을 씁니다.</li>
+    <li>H100 SXM은 HBM3 80GB를 쓰고, 1초에 3.35테라바이트를 읽고 씁니다.</li>
+  </ul></div>
+  <details>
+    <summary>Q. 기초 · 왜 이름에 Video가 붙어 있나요?</summary>
+  <div class="prose">
+  <p>처음에는 화면에 내보낼 그림 한 장, 즉 프레임 버퍼와 텍스처를 담으려고 만든 메모리였기 때문입니다. 지금은 AI 모델을 담는 그릇이 됐지만 이름은 그대로 남았습니다.</p>
+  </div>
+  </details>
+</section>
+
+<section class="ch" id="s1-2">
+  <div class="ch-head"><span class="ch-num">1.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li>GPU의 계산 속도는 세대마다 크게 늘었는데, 메모리가 데이터를 대 주는 속도는 그만큼 늘지 못했습니다. 이걸 <button class="t" data-t="memwall">메모리 벽</button>이라고 부릅니다.</li>
+    <li>GDDR은 선 하나당 속도를 계속 올려 버텼지만, 전력과 신호 품질에서 한계가 왔습니다.</li>
+  </ul></div>
+  <div class="callout idea"><span class="say">"그럼 메모리 칩을 위로 쌓아서, GPU 바로 옆에 아주 넓은 길로 붙이자!"</span>그래서 등장한 것이 바로 <b>HBM</b>입니다.<ul><li>2013년 JEDEC 표준이 됐고, 2015년 AMD Radeon R9 Fury에 처음 들어갔습니다.</li><li>NVIDIA는 2016년 P100부터 데이터센터 GPU에 HBM을 씁니다.</li></ul></div>
+</section>
+
+<section class="ch" id="s1-3">
+  <div class="ch-head"><span class="ch-num">1.3</span><h2>구조</h2></div>
+  <h3>1. HBM 스택 하나</h3>
+  <div class="prose"><ul>
+    <li>DRAM 칩 여러 장을 위로 쌓고, 칩을 뚫는 전극으로 위아래를 잇습니다. 이 전극을 <button class="t" data-t="tsv">TSV</button>, 실리콘 관통 전극이라고 합니다.</li>
+    <li>맨 아래에는 신호를 정리하는 베이스 다이가 있고, 그 위에 DRAM 다이를 8장에서 16장 쌓습니다.</li>
+    <li>스택 하나가 GPU와 주고받는 길은 1,024개입니다. HBM4는 2,048개로 두 배가 됐습니다. GDDR 칩 하나는 32개입니다.</li>
+  </ul></div>
+  <h3>2. 패키지 안의 배치</h3>
+  <div class="prose"><ul>
+    <li>GPU 다이와 HBM 스택을 실리콘 인터포저라는 얇은 판 위에 나란히 올립니다. TSMC의 CoWoS가 대표적인 방식입니다.</li>
+    <li>H100 SXM은 GPU 다이 옆에 HBM3 스택 5개를 켜서 씁니다.</li>
+  </ul></div>
+  <figure class="fig"><pre class="mermaid">flowchart LR
+  subgraph P["H100 패키지 (실리콘 인터포저 위)"]
+    direction LR
+    subgraph L["HBM3 스택"]
+      direction TB
+      h1["스택 1"]
+      h2["스택 2"]
+      h3["스택 3"]
+    end
+    G["GPU 다이&lt;br&gt;SM 132개 · L2 50MB"]
+    subgraph R2["HBM3 스택"]
+      direction TB
+      h4["스택 4"]
+      h5["스택 5"]
+    end
+    L &lt;--&gt;|"스택마다 1,024개의 길"| G
+    G &lt;--&gt; R2
+  end</pre></figure>
+  <figure class="fig"><pre class="mermaid">flowchart TB
+  subgraph S["HBM 스택 하나 (옆에서 본 모습)"]
+    direction TB
+    d4["DRAM 다이"]
+    d3["DRAM 다이"]
+    d2["DRAM 다이"]
+    d1["DRAM 다이"]
+    b["베이스 다이 (신호 정리)"]
+    d4 --- d3 --- d2 --- d1 --- b
+  end
+  S -.- N["다이 사이를 TSV가 위아래로 잇습니다&lt;br&gt;8장 · 12장 · 16장을 쌓습니다"]</pre></figure>
+  <h3>3. VRAM에 올라가는 것</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>올라가는 것</th><th>하는 일</th><th>언제</th></tr></thead>
+    <tbody>
+      <tr><td>모델 가중치</td><td>모델 그 자체</td><td>학습과 추론 모두</td></tr>
+      <tr><td>그래디언트 · 옵티마이저 상태</td><td>가중치를 얼마나 고칠지 계산한 값</td><td>학습</td></tr>
+      <tr><td>활성값 (activation)</td><td>층마다 나온 중간 결과</td><td>학습 (역전파에 다시 씀)</td></tr>
+      <tr><td>KV 캐시</td><td>앞서 읽은 토큰의 계산 결과</td><td>추론, 20회차에서 다룹니다</td></tr>
+      <tr><td>CUDA 컨텍스트</td><td>프로그램을 GPU에서 돌리기 위한 기본 공간</td><td>항상, 프로세스마다 수백 MB</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="ch" id="s1-4">
+  <div class="ch-head"><span class="ch-num">1.4</span><h2>작동 방식</h2></div>
+  <div class="prose"><ol>
+    <li><b>자리 잡기:</b> 프로그램이 <code>cudaMalloc</code>으로 VRAM에 자리를 잡습니다. PyTorch는 큰 덩어리를 미리 잡아 두고 안에서 나눠 씁니다.</li>
+    <li><b>옮겨 오기:</b> CPU 쪽 메모리에 있던 데이터를 PCIe로 VRAM에 복사합니다. 7회차에서 다룹니다.</li>
+    <li><b>동시에 읽기:</b> GPU의 메모리 컨트롤러가 스택마다 연결된 여러 채널로 한꺼번에 읽고 씁니다. 길 하나는 느려도 길이 아주 많아서 전체 속도가 큽니다.</li>
+    <li><b>모자라면 멈추기:</b> 자리가 모자라면 CPU처럼 디스크로 넘기지 않고, 바로 out of memory 오류, 줄여서 <button class="t" data-t="oom">OOM</button>으로 멈춥니다.</li>
+  </ol></div>
+  <div class="callout"><span class="ck">계산해 보기</span>H100 SXM의 대역폭은 길 5,120개, 즉 스택 5개 곱하기 1,024개에, 길 하나의 속도를 곱한 값입니다. 길 하나가 1초에 약 5.2기가비트를 보내면, 모두 약 3.35테라바이트입니다.</div>
+  <details>
+    <summary>Q. nvidia-smi에서 메모리가 꽉 차 보이는데, 정말 다 쓰고 있나요?</summary>
+  <div class="prose">
+  <p>꼭 그렇지 않습니다. PyTorch나 vLLM은 메모리를 미리 크게 잡아 두고 안에서 재사용합니다. vLLM은 기본으로 VRAM의 90%를 먼저 잡습니다. nvidia-smi는 잡아 둔 양을 보여 줘서, 실제 쓰는 양은 프레임워크의 메모리 통계로 봐야 합니다.</p>
+  </div>
+  </details>
+</section>
+
+<section class="ch" id="s1-5">
+  <div class="ch-head"><span class="ch-num">1.5</span><h2>이점</h2></div>
+  <div class="prose"><ul>
+    <li><b>대역폭이 큽니다:</b> H100 SXM은 3.35TB/s입니다. <button class="t" data-t="gddr">GDDR7</button>을 쓰는 RTX 5090은 약 1.8TB/s입니다.</li>
+    <li><b>전력을 덜 씁니다:</b> GPU 바로 옆이라 거리가 짧고, 길 하나의 속도가 낮아 비트당 전력이 적습니다.</li>
+    <li><b>보드가 단순해집니다:</b> 큰 용량이 패키지 안에 들어가서, 보드에 메모리 칩을 둘러 깔 필요가 없습니다.</li>
+    <li><b>큰 모델을 한 장에 담습니다:</b> 용량이 클수록 GPU를 나눠 쓰는 통신 비용이 줄어듭니다.</li>
+  </ul></div>
+  <details>
+    <summary>Q. 메모리가 성능을 좌우한다는 대표 사례가 있나요?</summary>
+  <div class="prose">
+  <p>H100과 H200은 계산 칩이 같습니다. H200은 메모리만 HBM3E 141GB, 4.8TB/s로 바꿨는데, LLM 추론이 크게 빨라졌습니다. 토큰을 하나씩 만드는 단계는 계산보다 가중치를 읽어 오는 속도에 묶여 있기 때문입니다.</p>
+  </div>
+  </details>
+</section>
+
+<section class="ch" id="s1-6">
+  <div class="ch-head"><span class="ch-num">1.6</span><h2>부재 시 문제</h2></div>
+  <p class="prose"><button class="t" data-t="hbm">HBM</button> 없이 GDDR만 있다고 가정해 보면, 이런 문제가 생깁니다.</p>
+  <div class="prose"><ul>
+    <li>같은 계산 성능이라도 데이터를 대 주지 못해서, LLM의 토큰 생성 속도가 크게 떨어집니다.</li>
+    <li>GPU 한 장의 용량이 작아서 큰 모델을 여러 장에 나눠 담아야 하고, 그만큼 통신이 늘어납니다.</li>
+  </ul></div>
+  <p class="prose">VRAM 자체가 모자라면, 모델이 올라가지 않아 학습과 추론이 시작조차 되지 않습니다.</p>
+</section>
+
+<section class="ch" id="s1-7">
+  <div class="ch-head"><span class="ch-num">1.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>비싸고 귀합니다:</b> 쌓고 뚫고 붙이는 공정이 어렵고, HBM과 <button class="t" data-t="cowos">CoWoS</button> 생산량이 GPU 출하량을 정합니다.</li>
+    <li><b>용량을 늘리기 어렵습니다:</b> GPU 옆에 놓을 수 있는 스택 수가 정해져 있습니다. 더 높이 쌓으면 수율과 발열 문제가 커집니다.</li>
+    <li><b>나중에 늘릴 수 없습니다:</b> GPU와 한 몸이라 증설이 안 됩니다.</li>
+    <li><b>GPU 개수 단위로만 나눠집니다:</b> Kubernetes 기본 설정은 GPU 개수만 셉니다. VRAM 양으로 나눠 주는 방법은 14회차에서 봅니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-8">
+  <div class="ch-head"><span class="ch-num">1.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. 양자화</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 숫자를 더 적은 비트로 저장해 모델 크기를 줄입니다. FP16을 FP8이나 4비트로 바꾸면 절반에서 4분의 1이 됩니다. 4회차에서 봤습니다.</li>
+    <li><b>해결하는 단점:</b> 용량이 모자라 모델이 올라가지 않는 문제를 줄입니다.</li>
+  </ul></div>
+  <h3>2. 나눠 담기</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 모델을 여러 GPU에 쪼개 담습니다. Tensor Parallelism과 FSDP가 대표적이고, 17회차와 18회차에서 다룹니다.</li>
+    <li><b>해결하는 단점:</b> GPU 한 장의 용량 한계를 넘습니다. 대신 통신이 늘어납니다.</li>
+  </ul></div>
+  <h3>3. 오프로딩</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 당장 안 쓰는 데이터를 CPU 메모리나 SSD로 내려놓습니다. 옵티마이저 상태나 KV 캐시를 주로 내립니다.</li>
+    <li><b>해결하는 단점:</b> VRAM을 나중에 늘릴 수 없는 문제를 우회합니다. 대신 PCIe를 거치는 만큼 느려집니다.</li>
+  </ul></div>
+  <h3>4. GDDR · LPDDR 같은 다른 메모리</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 대역폭이 덜 필요한 곳에는 값싼 GDDR7을 쓰고, CPU 쪽 LPDDR5X를 GPU가 함께 쓰게 붙입니다. Grace CPU와 NVLink-C2C가 그 예입니다.</li>
+    <li><b>해결하는 단점:</b> HBM이 비싸고 귀한 문제를 피합니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-9">
+  <div class="ch-head"><span class="ch-num">1.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>구분</th><th>HBM3 · HBM3E · HBM4</th><th>GDDR7</th><th>LPDDR5X</th><th>칩 안 SRAM</th></tr></thead>
+    <tbody>
+      <tr><td>GPU 하나의 대역폭</td><td>3.35TB/s (H100) ~ 22TB/s (Rubin)</td><td>약 1.8TB/s (RTX 5090)</td><td>수백 GB/s</td><td>수십 TB/s 이상</td></tr>
+      <tr><td>GPU 하나의 용량</td><td>80GB (H100) ~ 288GB (Rubin)</td><td>32GB (RTX 5090)</td><td>수백 GB</td><td>수백 MB 수준</td></tr>
+      <tr><td>가격</td><td>매우 비쌈</td><td>중간</td><td>쌈</td><td>칩 면적을 많이 씀</td></tr>
+      <tr><td>대표 사용처</td><td>H100 · B200 · Rubin</td><td>게이밍 · 워크스테이션 GPU</td><td>Grace · Vera CPU</td><td>Groq · Cerebras</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>VRAM 용량은 "모델이 올라가느냐"를, 대역폭은 "얼마나 빨리 도느냐"를 정합니다.</b> 새 GPU를 볼 때는 두 숫자를 함께 봅니다.</div>
+</section>
+
+<section class="ch" id="s1-10">
+  <div class="ch-head"><span class="ch-num">1.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. Rubin은 HBM4로 넘어갔습니다</h3>
+  <div class="prose"><ul>
+    <li>2026년 Rubin은 GPU 하나에 HBM4 스택 8개, 288GB, 최대 22TB/s를 씁니다. H100의 3.35TB/s보다 6배가 넘습니다.</li>
+    <li>HBM4는 스택 하나의 길을 2,048개로 두 배 넓혔습니다.</li>
+  </ul></div>
+  <div class="tbl"><table>
+    <thead><tr><th>세대</th><th>제품</th><th>메모리</th><th>용량</th><th>대역폭</th></tr></thead>
+    <tbody>
+      <tr><td>Hopper</td><td>H100 SXM (2022)</td><td>HBM3</td><td>80GB</td><td>3.35TB/s</td></tr>
+      <tr><td>Hopper</td><td>H200 (2024)</td><td>HBM3E</td><td>141GB</td><td>4.8TB/s</td></tr>
+      <tr><td>Blackwell</td><td>B200 (2024)</td><td>HBM3E</td><td>192GB</td><td>8TB/s</td></tr>
+      <tr><td>Rubin</td><td>Rubin (2026)</td><td>HBM4</td><td>288GB</td><td>22TB/s</td></tr>
+    </tbody>
+  </table></div>
+  <h3>2. 다음 세대 HBM4E 샘플이 나왔습니다</h3>
+  <div class="prose"><ul>
+    <li>삼성전자는 2026년 5월 말 12단 HBM4E 샘플 출하를 발표했습니다. 스택 하나에 48GB, 최대 3.6TB/s입니다.</li>
+    <li>SK하이닉스는 2026년 6월 12단 HBM4E 샘플을 출하했습니다. 길 하나의 속도는 최대 16기가비트입니다.</li>
+    <li>두 회사 모두 양산은 2027년을 목표로 합니다.</li>
+  </ul></div>
+  <h3>3. AMD도 용량으로 경쟁합니다</h3>
+  <div class="prose"><ul>
+    <li>AMD MI355X는 HBM3E 288GB, 8TB/s입니다. 같은 세대 B200의 192GB보다 큽니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>세대가 바뀔 때 가장 크게 느는 숫자는 계산 성능만이 아니라 HBM 대역폭과 용량입니다.</b> HBM 공급이 곧 GPU 공급을 정합니다.</div>
+</section>
+
+<!-- ============ PART 2 ============ -->
+<div class="part" id="p2">
+  <div class="pk">PART 2</div>
+  <h2>Global Memory와 Shared Memory</h2>
+  <p>여기까지가 하드웨어로 본 VRAM이었습니다. 이제 프로그램이 보는 메모리, Global Memory와 Shared Memory로 넘어가겠습니다.</p>
+</div>
+
+<section class="ch" id="s2-1">
+  <div class="ch-head"><span class="ch-num">2.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="gmem">Global Memory</button>는 <b>모든 스레드가 함께 쓰는 크고 느린 공간</b>이고, Shared Memory는 <b>같은 블록의 스레드끼리 쓰는 SM 안의 작고 빠른 공간</b>입니다.</p>
+  <div class="prose"><ul>
+    <li>Global Memory는 1부에서 본 VRAM을 프로그램 쪽에서 부르는 이름입니다. 커널이 끝나도 남아 있습니다.</li>
+    <li>Shared Memory는 SM 안의 SRAM입니다. 블록이 끝나면 사라지고, 코드에서 <code>__shared__</code>로 선언합니다.</li>
+    <li>3회차에서 본 블록이 바로 Shared Memory를 함께 쓰는 단위입니다.</li>
+  </ul></div>
+  <details>
+    <summary>Q. 기초 · SRAM과 DRAM은 무엇이 다른가요?</summary>
+  <div class="prose">
+  <p>DRAM은 축전기에 전기를 담아 0과 1을 기억해서 작고 싸지만, 주기적으로 다시 채워야 하고 느립니다. SRAM은 트랜지스터 여섯 개로 한 비트를 붙잡아 빠르지만, 자리를 많이 차지해 비쌉니다. 그래서 큰 VRAM은 DRAM, SM 안의 작은 메모리는 SRAM입니다.</p>
+  </div>
+  </details>
+</section>
+
+<section class="ch" id="s2-2">
+  <div class="ch-head"><span class="ch-num">2.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li>Global Memory에서 숫자 하나를 가져오는 데 수백 사이클이 걸립니다.</li>
+    <li>행렬 곱셈은 같은 숫자를 여러 번 다시 읽는데, 그때마다 VRAM까지 다녀오면 계산 유닛이 놉니다.</li>
+    <li>CPU처럼 하드웨어 캐시에 맡기면, 수만 개 스레드가 캐시를 서로 밀어내 재사용이 잘 안 됐습니다.</li>
+  </ul></div>
+  <div class="callout idea"><span class="say">"그럼 무엇을 가까이 둘지 프로그래머가 직접 정하는 빠른 공간을 SM 안에 두자!"</span>그래서 2006년 G80에서 등장한 것이 바로 <b><button class="t" data-t="smem">Shared Memory</button></b>입니다.<ul><li>G80은 SM 하나에 16KB였고, H100은 최대 228KB입니다.</li></ul></div>
+</section>
+
+<section class="ch" id="s2-3">
+  <div class="ch-head"><span class="ch-num">2.3</span><h2>구조</h2></div>
+  <h3>1. 두 공간의 위치</h3>
+  <figure class="fig"><pre class="mermaid">flowchart TB
+  subgraph SM1["SM 1"]
+    S1["Shared Memory&lt;br&gt;블록 A · 블록 B가 따로 씀"]
+  end
+  subgraph SM2["SM 2"]
+    S2["Shared Memory&lt;br&gt;블록 C · 블록 D가 따로 씀"]
+  end
+  SM1 --&gt; L2["L2 Cache"]
+  SM2 --&gt; L2
+  L2 --&gt; G["Global Memory = VRAM&lt;br&gt;모든 블록이 함께 씀"]</pre></figure>
+  <div class="prose"><ul>
+    <li>Shared Memory는 SM마다 따로 있고, 그 안에서도 블록마다 칸을 나눠 받습니다. 다른 블록의 칸은 볼 수 없습니다.</li>
+    <li>Global Memory는 하나라서, 모든 블록이 같은 주소를 봅니다.</li>
+  </ul></div>
+  <h3>2. Shared Memory 안쪽</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>구성</th><th>하는 일</th><th>H100 SM 1개당</th></tr></thead>
+    <tbody>
+      <tr><td>SRAM 한 덩어리</td><td>L1 캐시와 Shared Memory가 나눠 씁니다</td><td>256KB</td></tr>
+      <tr><td>Shared Memory 몫</td><td>블록에 나눠 줍니다</td><td>최대 228KB, 블록 하나는 최대 227KB</td></tr>
+      <tr><td><button class="t" data-t="bank">뱅크</button></td><td>동시에 읽을 수 있게 32칸으로 나눈 구역</td><td>32개, 4바이트 단위</td></tr>
+    </tbody>
+  </table></div>
+  <h3>3. Global 영역에 있는 다른 공간</h3>
+  <div class="prose"><ul>
+    <li><b>Local Memory:</b> 레지스터가 모자랄 때 넘친 값이 가는 곳입니다. 이름은 Local이지만 실제로는 VRAM에 있습니다. 3.7에서 봅니다.</li>
+    <li><b>Constant Memory:</b> 모든 스레드가 읽기만 하는 작은 상수 공간입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-4">
+  <div class="ch-head"><span class="ch-num">2.4</span><h2>작동 방식</h2></div>
+  <p class="prose">행렬 곱셈에서 쓰는 방법, 즉 <button class="t" data-t="tiling">타일링</button>을 따라가 보겠습니다.</p>
+  <div class="prose"><ol>
+    <li><b>한 번 가져오기:</b> 블록의 스레드들이 Global Memory에서 행렬 조각, 즉 타일을 나눠 읽어 Shared Memory에 채웁니다.</li>
+    <li><b>기다리기:</b> <code>__syncthreads()</code>로 모든 스레드가 다 채울 때까지 기다립니다.</li>
+    <li><b>여러 번 쓰기:</b> 스레드들이 Shared Memory의 타일을 여러 번 읽어 계산합니다. 이때는 VRAM에 가지 않습니다.</li>
+    <li><b>결과만 쓰기:</b> 다 계산한 결과만 Global Memory에 씁니다.</li>
+  </ol></div>
+  <figure class="fig"><pre class="mermaid">flowchart LR
+  G["Global Memory&lt;br&gt;큰 행렬"] --&gt;|"① 타일 한 번 읽기"| S["Shared Memory&lt;br&gt;타일"]
+  S --&gt;|"② 모두 채울 때까지 대기"| S
+  S --&gt;|"③ 여러 번 재사용"| C["계산&lt;br&gt;CUDA Core · Tensor Core"]
+  C --&gt;|"④ 결과만 쓰기"| G</pre></figure>
+  <pre><code>__global__ void tile_example(const float* g_in, float* g_out) {
+    __shared__ float tile[32][32];                 // 블록이 함께 쓰는 공간
+    tile[threadIdx.y][threadIdx.x] = g_in[/*...*/]; // Global에서 한 번만 읽기
+    __syncthreads();                               // 모두 채울 때까지 대기
+    // tile을 여러 번 읽어 계산 (Global에 다시 가지 않음)
+}</code></pre>
+  <details>
+    <summary>Q. 뱅크 충돌은 무엇인가요?</summary>
+  <div class="prose">
+  <p>Shared Memory는 32개 뱅크로 나뉘어 있어서, warp의 32개 스레드가 서로 다른 뱅크를 읽으면 한 번에 끝납니다. 여러 스레드가 같은 뱅크의 다른 주소를 읽으면 차례로 처리해서 느려집니다. 배열 폭을 32에서 33으로 한 칸 늘려 피하는 방법이 흔합니다.</p>
+  </div>
+  </details>
+</section>
+
+<section class="ch" id="s2-5">
+  <div class="ch-head"><span class="ch-num">2.5</span><h2>이점</h2></div>
+  <div class="prose"><ul>
+    <li><b>VRAM 왕복을 줄입니다:</b> 32 곱하기 32 타일이면, 숫자 하나를 VRAM에서 한 번 읽어 32번 씁니다.</li>
+    <li><b>훨씬 빠릅니다:</b> Shared Memory는 수십 사이클, Global Memory는 수백 사이클이라 대략 10배 차이입니다.</li>
+    <li><b>블록 안에서 값을 나눕니다:</b> 스레드끼리 중간 결과를 주고받는 통로가 됩니다.</li>
+    <li><b>결과가 예측됩니다:</b> 캐시처럼 운에 맡기지 않고, 무엇이 남을지 프로그래머가 압니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-6">
+  <div class="ch-head"><span class="ch-num">2.6</span><h2>부재 시 문제</h2></div>
+  <p class="prose">Shared Memory가 없다고 가정해 보면, 이런 문제가 생깁니다.</p>
+  <div class="prose"><ul>
+    <li>같은 숫자를 다시 읽을 때마다 VRAM이나 캐시에 기대야 해서, Tensor Core가 데이터를 기다리며 놉니다.</li>
+    <li>블록 안 스레드끼리 값을 주고받으려면 VRAM을 거쳐야 합니다.</li>
+    <li>FlashAttention처럼 중간 결과를 칩 안에서 끝내는 기법을 쓸 수 없습니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-7">
+  <div class="ch-head"><span class="ch-num">2.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>작습니다:</b> SM 하나에 수백 KB뿐입니다. 블록이 많이 쓰면 SM에 올라갈 블록 수가 줄어 <button class="t" data-t="occupancy">점유율</button>이 떨어집니다. 2회차 4.4에서 계산해 봤습니다.</li>
+    <li><b>신경 쓸 게 많습니다:</b> 뱅크 충돌, 동기화, 타일 크기를 프로그래머가 직접 맞춰야 합니다.</li>
+    <li><b>블록이 끝나면 사라집니다:</b> 커널이나 블록을 넘어 남기려면 Global Memory에 써야 합니다.</li>
+    <li><b>다른 SM과 나누지 못합니다:</b> 원래는 같은 SM의 같은 블록만 볼 수 있습니다. 2.8에서 봅니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-8">
+  <div class="ch-head"><span class="ch-num">2.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. 비동기 복사와 <button class="t" data-t="tma">TMA</button></h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> Global Memory에서 Shared Memory로 옮기는 일을 계산과 동시에 진행합니다. Ampere의 <code>cp.async</code>, Hopper의 TMA가 있습니다. 3회차 PART 5에서 봤습니다.</li>
+    <li><b>해결하는 단점:</b> 옮기는 동안 계산 유닛이 쉬는 문제를 줄입니다.</li>
+  </ul></div>
+  <h3>2. Distributed Shared Memory (H100부터)</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 2회차에서 본 Thread Block Cluster 안에서, 다른 SM의 Shared Memory를 직접 읽고 씁니다.</li>
+    <li><b>해결하는 단점:</b> Shared Memory를 다른 SM과 나누지 못하는 문제를 풉니다.</li>
+  </ul></div>
+  <h3>3. 타일 단위 프로그래밍 도구</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> Triton이나 cuTile처럼 타일 단위로 코드를 쓰면, Shared Memory 배치와 동기화를 컴파일러가 맡습니다.</li>
+    <li><b>해결하는 단점:</b> 뱅크 충돌과 동기화를 손으로 맞추는 부담을 줄입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-9">
+  <div class="ch-head"><span class="ch-num">2.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>구분</th><th>Global Memory</th><th>Shared Memory</th><th><button class="t" data-t="l1">L1 Cache</button></th></tr></thead>
+    <tbody>
+      <tr><td>위치</td><td>VRAM</td><td>SM 안 SRAM</td><td>SM 안 SRAM (Shared와 같은 덩어리)</td></tr>
+      <tr><td>크기 (H100)</td><td>80GB</td><td>SM당 최대 228KB</td><td>Shared Memory를 빼고 남은 몫</td></tr>
+      <tr><td>대략의 지연</td><td>수백 사이클</td><td>수십 사이클</td><td>수십 사이클</td></tr>
+      <tr><td>누가 정하나</td><td>프로그래머가 할당</td><td>프로그래머가 직접 배치</td><td>하드웨어가 자동</td></tr>
+      <tr><td>언제까지 남나</td><td>해제할 때까지</td><td>블록이 끝날 때까지</td><td>다른 데이터에 밀려날 때까지</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>빠른 커널의 기본은 "Global에서 한 번 읽고, Shared에서 여러 번 쓰기"입니다.</b> FlashAttention이 빠른 이유도 여기에 있습니다.</div>
+</section>
+
+<section class="ch" id="s2-10">
+  <div class="ch-head"><span class="ch-num">2.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. Shared Memory 관리를 컴파일러에 맡깁니다</h3>
+  <div class="prose"><ul>
+    <li>NVIDIA는 2025년 12월 CUDA 13.1과 함께 Python용 타일 프로그래밍 도구 <button class="t" data-t="cudatile">cuTile</button>을 내놓았습니다.</li>
+    <li>타일 단위로 계산만 적으면, Shared Memory와 TMA, Tensor Core 사용은 컴파일러가 정합니다.</li>
+    <li>2026년에는 C++ 버전도 CUDA 13.3에 들어갔습니다.</li>
+  </ul></div>
+  <h3>2. 크기는 그대로, 쓰는 방식이 바뀌었습니다</h3>
+  <div class="prose"><ul>
+    <li>Blackwell도 SM 하나의 L1과 Shared Memory를 합친 크기는 256KB로 Hopper와 같습니다.</li>
+    <li>대신 Tensor Core 결과를 담는 TMEM이 따로 생겨, Shared Memory와 레지스터의 부담을 나눠 집니다. 3.10에서 봅니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>Shared Memory는 커지지 않고, 더 잘 쓰는 방향으로 가고 있습니다.</b> 직접 다루는 일은 점점 컴파일러와 라이브러리 몫이 됩니다.</div>
+</section>
+
+<!-- ============ PART 3 ============ -->
+<div class="part" id="p3">
+  <div class="pk">PART 3</div>
+  <h2>Register (레지스터)</h2>
+  <p>여기까지가 블록이 함께 쓰는 공간이었습니다. 이제 스레드 하나가 혼자 쓰는 가장 빠른 공간, 레지스터로 넘어가겠습니다.</p>
+</div>
+
+<section class="ch" id="s3-1">
+  <div class="ch-head"><span class="ch-num">3.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="register">레지스터</button>는 <b>스레드마다 따로 주어지는, GPU에서 가장 빠르고 가장 작은 저장 공간</b>입니다.</p>
+  <div class="prose"><ul>
+    <li>계산의 재료와 결과가 직접 오가는 곳입니다. 코드의 지역 변수가 주로 여기에 있습니다.</li>
+    <li>한 칸은 32비트이고, 스레드 하나는 최대 255칸까지 씁니다. 몇 칸을 쓸지는 컴파일러가 정합니다.</li>
+    <li>3회차에서 본 스레드가 바로 레지스터를 가진 단위입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-2">
+  <div class="ch-head"><span class="ch-num">3.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li>계산 유닛은 메모리에서 바로 계산하지 못하고, 레지스터에 있는 값으로만 계산합니다. 이건 CPU도 같습니다.</li>
+    <li>그런데 GPU는 수천 개 <button class="t" data-t="warp">warp</button>를 번갈아 실행합니다. CPU처럼 바꿀 때마다 레지스터를 메모리에 저장하고 다시 불러오면 너무 느립니다.</li>
+  </ul></div>
+  <div class="callout idea"><span class="say">"그럼 올라온 모든 스레드의 레지스터를 처음부터 칩 안에 다 두자!"</span>그래서 2006년 G80부터 GPU가 갖게 된 것이 바로 <b>큰 레지스터 파일</b>입니다.<ul><li>G80은 SM 하나에 레지스터 8,192칸, 32KB였습니다. H100은 65,536칸, 256KB입니다.</li></ul></div>
+</section>
+
+<section class="ch" id="s3-3">
+  <div class="ch-head"><span class="ch-num">3.3</span><h2>구조</h2></div>
+  <div class="prose"><ul>
+    <li><button class="t" data-t="sm">SM</button> 하나에 레지스터 65,536칸, 칸마다 32비트라서 256KB입니다.</li>
+    <li>H100 SXM은 SM이 132개라서, 레지스터를 모두 합치면 약 33MB입니다. L2 캐시 50MB와 맞먹는 크기입니다.</li>
+    <li>SM의 네 구역이 64KB씩 나눠 갖고, 각 구역의 warp들이 다시 나눠 씁니다.</li>
+  </ul></div>
+  <figure class="fig"><pre class="mermaid">flowchart TB
+  RF["SM의 레지스터 65,536칸 (256KB)"] --&gt; Q1["구역 1 · 16,384칸"]
+  RF --&gt; Q2["구역 2 · 16,384칸"]
+  RF --&gt; Q3["구역 3 · 16,384칸"]
+  RF --&gt; Q4["구역 4 · 16,384칸"]
+  Q1 --&gt; W["warp마다 고정된 몫&lt;br&gt;스레드당 칸 수 × 32"]</pre></figure>
+  <div class="tbl"><table>
+    <thead><tr><th>항목</th><th>값 (H100)</th></tr></thead>
+    <tbody>
+      <tr><td>한 칸의 크기</td><td>32비트</td></tr>
+      <tr><td>SM 하나의 칸 수</td><td>65,536칸, 256KB</td></tr>
+      <tr><td>스레드 하나의 최대 칸 수</td><td>255칸</td></tr>
+      <tr><td>GPU 전체</td><td>약 33MB</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="ch" id="s3-4">
+  <div class="ch-head"><span class="ch-num">3.4</span><h2>작동 방식</h2></div>
+  <div class="prose"><ol>
+    <li><b>칸 수 정하기:</b> 컴파일할 때 스레드 하나가 쓸 칸 수가 정해집니다. <code>nvcc --resource-usage</code>로 확인합니다.</li>
+    <li><b>나눠 주기:</b> 블록이 SM에 올라가면, 스레드 수 곱하기 칸 수만큼 레지스터를 떼어 줍니다. 블록이 끝날 때까지 그대로입니다.</li>
+    <li><b>바로 바꾸기:</b> warp를 바꿀 때 레지스터를 옮기지 않습니다. 이미 다 칩 안에 있어서 바꾸는 비용이 거의 없습니다.</li>
+    <li><b>넘치면 내려놓기:</b> 칸이 모자라면 컴파일러가 일부 값을 Local Memory로 내립니다. 이걸 <button class="t" data-t="spill">레지스터 넘침</button>, 영어로 spill이라고 합니다.</li>
+  </ol></div>
+  <figure class="fig"><pre class="mermaid">flowchart LR
+  C["컴파일&lt;br&gt;스레드당 칸 수 결정"] --&gt; A["블록이 SM에 올라감&lt;br&gt;칸 수 × 스레드 수만큼 할당"]
+  A --&gt; E["실행&lt;br&gt;warp를 바꿔도 레지스터는 그대로"]
+  C -.-&gt;|"칸이 모자라면"| S["Local Memory로 넘침&lt;br&gt;VRAM까지 다녀옴"]</pre></figure>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>스레드 하나가 레지스터를 두 배로 쓰면, SM에 올라갈 스레드는 절반이 됩니다.</b> 2회차 4.4의 점유율 계산이 바로 이 이야기입니다.</div>
+</section>
+
+<section class="ch" id="s3-5">
+  <div class="ch-head"><span class="ch-num">3.5</span><h2>이점</h2></div>
+  <div class="prose"><ul>
+    <li><b>가장 빠릅니다:</b> 약 1 사이클 안에 읽고 씁니다.</li>
+    <li><b>warp를 바꾸는 비용이 거의 없습니다:</b> 모든 warp의 레지스터가 칩 안에 있어서, 기다리는 warp 대신 다른 warp를 바로 실행합니다. 2회차의 <button class="t" data-t="latency">지연 은닉</button>이 여기서 나옵니다.</li>
+    <li><b>재사용에 강합니다:</b> 행렬 곱셈의 부분합처럼 계속 쓰는 값을 레지스터에 두면, 메모리에 다시 가지 않습니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-6">
+  <div class="ch-head"><span class="ch-num">3.6</span><h2>부재 시 문제</h2></div>
+  <p class="prose">레지스터 파일이 작다고 가정해 보면, 이런 문제가 생깁니다.</p>
+  <div class="prose"><ul>
+    <li>중간값을 매번 메모리에 썼다 읽어야 해서, 계산 속도가 메모리 속도로 떨어집니다.</li>
+    <li>warp를 바꿀 때마다 레지스터를 저장하고 복원해야 해서, 수천 개 warp를 번갈아 돌리는 방식이 무너집니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-7">
+  <div class="ch-head"><span class="ch-num">3.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>나눠 쓰는 자원입니다:</b> 스레드 하나가 많이 쓰면 SM에 올라갈 스레드가 줄어 <button class="t" data-t="occupancy">점유율</button>이 떨어집니다.</li>
+    <li><b>줄이면 넘칩니다:</b> 억지로 칸 수를 줄이면 넘친 값이 VRAM의 Local Memory로 가서 오히려 느려집니다.</li>
+    <li><b>직접 다루기 어렵습니다:</b> 몇 칸을 쓸지는 컴파일러가 정해서, 프로그래머는 간접적으로만 조절합니다.</li>
+    <li><b>Tensor Core 결과가 자리를 차지합니다:</b> 큰 행렬을 곱할수록 결과를 쌓을 칸이 많이 필요합니다. 3.8에서 봅니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-8">
+  <div class="ch-head"><span class="ch-num">3.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. 레지스터 상한 지정</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> <code>__launch_bounds__</code>나 <code>-maxrregcount</code>로 스레드당 칸 수의 상한을 컴파일러에 알려 줍니다.</li>
+    <li><b>해결하는 단점:</b> 점유율을 원하는 수준으로 맞춥니다. 넘침이 생기지 않는지 함께 확인합니다.</li>
+  </ul></div>
+  <h3>2. <button class="t" data-t="shuffle">Warp Shuffle</button></h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> warp 안 스레드끼리 레지스터 값을 직접 주고받는 명령입니다.</li>
+    <li><b>해결하는 단점:</b> 값을 나누려고 Shared Memory를 거칠 필요가 없어집니다.</li>
+  </ul></div>
+  <h3>3. warp마다 칸 수 바꾸기 (H100부터)</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 데이터를 옮기는 warp는 칸을 적게, 계산하는 warp는 많이 쓰도록 실행 중에 나눠 줍니다. <code>setmaxnreg</code> 명령이고, Warp Specialization과 함께 씁니다.</li>
+    <li><b>해결하는 단점:</b> 모든 스레드가 같은 칸 수를 받아 낭비되는 문제를 줄입니다.</li>
+  </ul></div>
+  <h3>4. TMEM (데이터센터용 Blackwell부터)</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> Tensor Core 결과를 레지스터 대신 담는 SM 안의 전용 공간입니다.</li>
+    <li><b>해결하는 단점:</b> Tensor Core 결과가 레지스터를 차지하는 문제를 없앱니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-9">
+  <div class="ch-head"><span class="ch-num">3.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>구분</th><th>Register</th><th>Shared Memory</th><th><button class="t" data-t="localmem">Local Memory</button> (넘침)</th><th>TMEM (Blackwell)</th></tr></thead>
+    <tbody>
+      <tr><td>누가 쓰나</td><td>스레드 하나</td><td>같은 블록</td><td>스레드 하나</td><td>Tensor Core 결과</td></tr>
+      <tr><td>위치</td><td>SM 안</td><td>SM 안</td><td>VRAM (캐시를 거침)</td><td>SM 안</td></tr>
+      <tr><td>속도</td><td>가장 빠름</td><td>빠름</td><td>느림</td><td>빠름</td></tr>
+      <tr><td>SM 하나의 크기</td><td>256KB</td><td>최대 228KB</td><td>VRAM 크기만큼</td><td>256KB</td></tr>
+      <tr><td>누가 정하나</td><td>컴파일러</td><td>프로그래머</td><td>컴파일러 (원치 않는 결과)</td><td>프로그래머 · 라이브러리</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="ch" id="s3-10">
+  <div class="ch-head"><span class="ch-num">3.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. Tensor Core 결과가 레지스터를 떠났습니다</h3>
+  <div class="prose"><ul>
+    <li>데이터센터용 Blackwell은 SM마다 <button class="t" data-t="tmem">TMEM</button> 256KB를 둡니다. 레지스터 256KB와 같은 크기의 공간이 하나 더 생긴 셈입니다.</li>
+    <li>"누적값은 레지스터에 둔다"는 오랜 전제가 바뀌면서, 고성능 커널을 짜는 방식도 바뀌었습니다. 2회차 3.10에서 본 내용입니다.</li>
+  </ul></div>
+  <h3>2. 레지스터 배분도 컴파일러가 맡습니다</h3>
+  <div class="prose"><ul>
+    <li>cuTile, Triton 같은 타일 도구는 타일 크기에 맞춰 레지스터 배분까지 정합니다.</li>
+    <li>프로그래머가 칸 수를 직접 따지는 일은 라이브러리를 만드는 사람의 몫으로 좁아지고 있습니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>레지스터는 여전히 가장 빠르지만, 가장 많이 다투는 자원이기도 합니다.</b> 그래서 새 세대는 레지스터 옆에 전용 공간을 붙이는 쪽으로 가고 있습니다.</div>
+</section>
+
+<!-- ============ PART 4 ============ -->
+<div class="part" id="p4">
+  <div class="pk">PART 4</div>
+  <h2>L1 · L2 Cache</h2>
+  <p>여기까지가 프로그래머와 컴파일러가 정하는 공간이었습니다. 마지막으로 하드웨어가 알아서 관리하는 L1과 L2 캐시를 보겠습니다.</p>
+</div>
+
+<section class="ch" id="s4-1">
+  <div class="ch-head"><span class="ch-num">4.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="l1">L1</button>과 L2는 <b>최근에 읽은 데이터를 칩 안에 잠시 남겨, VRAM까지 가는 횟수를 줄이는 하드웨어 캐시</b>입니다.</p>
+  <div class="prose"><ul>
+    <li><b>L1:</b> SM마다 하나씩 있는 작고 빠른 캐시입니다. Shared Memory와 같은 SRAM을 나눠 씁니다.</li>
+    <li><b>L2:</b> 칩 전체에 하나 있고, 모든 SM이 함께 씁니다. Global Memory를 읽고 쓰는 모든 요청이 L2를 거칩니다.</li>
+    <li>H100 SXM의 L2는 50MB입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s4-2">
+  <div class="ch-head"><span class="ch-num">4.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li>초기 GPU에는 그림용 텍스처 캐시 말고 범용 캐시가 거의 없었습니다.</li>
+    <li>그래서 그래프 탐색처럼 주소가 불규칙한 계산은 매번 VRAM까지 다녀와야 했습니다.</li>
+  </ul></div>
+  <div class="callout idea"><span class="say">"그럼 CPU처럼 하드웨어가 알아서 채우는 범용 캐시를 두 단계로 두자!"</span>그래서 2010년 Fermi에서 등장한 것이 바로 <b>L1과 <button class="t" data-t="l2">L2</button> 캐시</b>입니다.<ul><li>Fermi의 L2는 768KB였고, H100은 50MB입니다.</li></ul></div>
+</section>
+
+<section class="ch" id="s4-3">
+  <div class="ch-head"><span class="ch-num">4.3</span><h2>구조</h2></div>
+  <h3>1. 위치</h3>
+  <figure class="fig"><pre class="mermaid">flowchart TB
+  subgraph SMs["SM 132개"]
+    direction LR
+    A["SM&lt;br&gt;L1 · Shared&lt;br&gt;256KB"]
+    B["SM&lt;br&gt;L1 · Shared&lt;br&gt;256KB"]
+    C["…"]
+  end
+  A --&gt; L2["L2 Cache 50MB&lt;br&gt;모든 SM이 공유"]
+  B --&gt; L2
+  C --&gt; L2
+  L2 --&gt; V["VRAM (HBM3) 80GB"]</pre></figure>
+  <h3>2. 구성</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>구분</th><th>L1 Cache</th><th>L2 Cache</th></tr></thead>
+    <tbody>
+      <tr><td>몇 개</td><td>SM마다 하나</td><td>칩 전체에 하나 (여러 조각으로 나뉨)</td></tr>
+      <tr><td>크기 (H100)</td><td>SM당 256KB에서 Shared Memory를 뺀 몫</td><td>50MB</td></tr>
+      <tr><td>대략의 지연</td><td>수십 사이클</td><td>약 200 사이클</td></tr>
+      <tr><td>함께 쓰는 범위</td><td>그 SM의 스레드</td><td>모든 SM</td></tr>
+      <tr><td>같은 값을 보장하나</td><td>아니오. 다른 SM이 바꾼 값이 반영되지 않을 수 있습니다</td><td>예. 모든 SM이 같은 값을 봅니다</td></tr>
+      <tr><td>그 밖의 역할</td><td>레지스터에서 넘친 값도 담습니다</td><td>여러 스레드가 같은 값을 고치는 <button class="t" data-t="atomic">원자 연산</button>을 처리합니다</td></tr>
+    </tbody>
+  </table></div>
+  <div class="prose"><ul>
+    <li>캐시는 128바이트 줄 단위로 관리하고, 32바이트씩 나눠 채웁니다.</li>
+    <li>L1과 Shared Memory의 비율은 커널마다 정할 수 있습니다. Shared Memory를 많이 잡으면 L1이 줄어듭니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s4-4">
+  <div class="ch-head"><span class="ch-num">4.4</span><h2>작동 방식</h2></div>
+  <div class="prose"><ol>
+    <li><b>L1에서 찾기:</b> 스레드가 Global Memory 주소를 읽으면 먼저 자기 SM의 L1을 봅니다. 있으면 바로 받습니다. 이걸 <button class="t" data-t="hit">적중</button>, 영어로 hit라고 합니다.</li>
+    <li><b>L2에서 찾기:</b> L1에 없으면 L2를 봅니다.</li>
+    <li><b>VRAM에서 가져오기:</b> L2에도 없으면 VRAM에서 가져오고, 오는 길에 L2와 L1에 남겨 둡니다.</li>
+    <li><b>밀어내기:</b> 캐시가 차면 오래 안 쓴 데이터를 밀어내고 새 데이터를 넣습니다.</li>
+  </ol></div>
+  <figure class="fig"><pre class="mermaid">sequenceDiagram
+  participant T as 스레드
+  participant L1 as L1 (SM 안)
+  participant L2 as L2 (칩 공유)
+  participant V as VRAM
+  T-&gt;&gt;L1: 주소 읽기
+  alt L1에 있음
+    L1--&gt;&gt;T: 바로 반환 (수십 사이클)
+  else L1에 없음
+    L1-&gt;&gt;L2: 요청
+    alt L2에 있음
+      L2--&gt;&gt;L1: 반환 (약 200 사이클)
+    else L2에도 없음
+      L2-&gt;&gt;V: 요청
+      V--&gt;&gt;L2: 반환 (수백 사이클)
+      L2--&gt;&gt;L1: 남겨 두고 전달
+    end
+    L1--&gt;&gt;T: 반환
+  end</pre></figure>
+  <details>
+    <summary>Q. Shared Memory와 L1은 같은 공간인데, 무엇이 다른가요?</summary>
+  <div class="prose">
+  <p>물리적으로는 같은 SRAM입니다. 프로그래머가 <code>__shared__</code>로 무엇을 둘지 정하면 Shared Memory이고, 하드웨어가 최근 읽은 것을 알아서 남기면 L1입니다.</p>
+  </div>
+  </details>
+</section>
+
+<section class="ch" id="s4-5">
+  <div class="ch-head"><span class="ch-num">4.5</span><h2>이점</h2></div>
+  <div class="prose"><ul>
+    <li><b>신경 쓰지 않아도 빨라집니다:</b> 같은 데이터를 다시 읽으면 하드웨어가 알아서 칩 안에서 줍니다.</li>
+    <li><b>VRAM 대역폭을 아낍니다:</b> L2에서 끝나는 요청은 VRAM까지 가지 않아서, 실제로 쓸 수 있는 대역폭이 늘어납니다.</li>
+    <li><b>SM끼리 데이터를 나눕니다:</b> 여러 SM이 같은 가중치를 읽으면, 첫 SM이 가져온 것을 L2에서 나눠 받습니다.</li>
+    <li><b>불규칙한 접근을 돕습니다:</b> 그래프나 임베딩 조회처럼 Shared Memory로 미리 짜기 어려운 접근에 특히 도움이 됩니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s4-6">
+  <div class="ch-head"><span class="ch-num">4.6</span><h2>부재 시 문제</h2></div>
+  <p class="prose">L1과 L2가 없다고 가정해 보면, 이런 문제가 생깁니다.</p>
+  <div class="prose"><ul>
+    <li>모든 읽기가 VRAM까지 가서, 대역폭이 금방 바닥납니다.</li>
+    <li>여러 SM이 같은 데이터를 각자 VRAM에서 따로 읽어 같은 일을 반복합니다.</li>
+    <li>레지스터에서 넘친 값이 곧바로 VRAM으로 가서, 넘침의 손해가 훨씬 커집니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s4-7">
+  <div class="ch-head"><span class="ch-num">4.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>예측하기 어렵습니다:</b> 데이터가 캐시 크기를 넘는 순간 적중률이 떨어지면서 성능이 갑자기 꺾입니다.</li>
+    <li><b>스레드당 몫이 작습니다:</b> 총량은 CPU 캐시와 비슷하거나 크지만, 동시에 도는 스레드가 수만 개라 한 스레드의 몫은 훨씬 작습니다.</li>
+    <li><b>L1은 SM끼리 값을 맞춰 주지 않습니다:</b> 다른 SM이 쓴 값을 바로 봐야 하면 L2나 원자 연산을 써야 합니다.</li>
+    <li><b>늘리기 비쌉니다:</b> SRAM은 자리를 많이 차지하고, 공정이 미세해져도 잘 줄지 않습니다. 4.10에서 봅니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s4-8">
+  <div class="ch-head"><span class="ch-num">4.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. Shared Memory로 직접 관리</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 반드시 재사용할 데이터는 캐시에 맡기지 않고 Shared Memory에 직접 둡니다. PART 2에서 본 방법입니다.</li>
+    <li><b>해결하는 단점:</b> 캐시가 예측하기 어려운 문제를 피합니다.</li>
+  </ul></div>
+  <h3>2. L2 지속 영역 지정 (A100부터)</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 자주 쓰는 데이터 범위를 정해 주면, L2가 그 데이터를 오래 남깁니다. <code>cudaAccessPolicyWindow</code>로 정합니다.</li>
+    <li><b>해결하는 단점:</b> 중요한 데이터가 다른 데이터에 밀려나는 문제를 줄입니다.</li>
+  </ul></div>
+  <h3>3. 타일링과 <button class="t" data-t="fusion">커널 퓨전</button></h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 데이터를 캐시 크기에 맞게 잘라 처리하고, 여러 단계를 한 커널로 합쳐 중간 결과가 캐시 밖으로 나가지 않게 합니다.</li>
+    <li><b>해결하는 단점:</b> 데이터가 캐시를 넘쳐 성능이 꺾이는 문제를 줄입니다.</li>
+  </ul></div>
+  <h3>4. L2 뒤의 큰 캐시</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> L2와 VRAM 사이에 수백 MB의 캐시를 하나 더 둡니다. AMD의 Infinity Cache가 대표적입니다.</li>
+    <li><b>해결하는 단점:</b> L2가 작아서 VRAM까지 가는 요청을 한 번 더 걸러 냅니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s4-9">
+  <div class="ch-head"><span class="ch-num">4.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>구분</th><th>NVIDIA H100 SXM</th><th>NVIDIA B200</th><th>AMD MI355X</th><th>CPU (서버용)</th></tr></thead>
+    <tbody>
+      <tr><td>SM에 가까운 캐시</td><td>L1, SM당 Shared와 합쳐 256KB</td><td>L1, SM당 Shared와 합쳐 256KB</td><td>L1, CU당 32KB</td><td>L1·L2, 코어당 수 MB</td></tr>
+      <tr><td>칩 전체가 함께 쓰는 캐시</td><td>L2 50MB</td><td>L2 126MB (칩 2개 합계)</td><td>L2, 조각마다 4MB</td><td>L3, 수백 MB까지</td></tr>
+      <tr><td>VRAM 앞의 큰 캐시</td><td>없음</td><td>없음</td><td><button class="t" data-t="infinitycache">Infinity Cache</button> 256MB</td><td>해당 없음</td></tr>
+      <tr><td>기본 생각</td><td>많은 스레드로 기다림을 숨기고, 캐시는 보조</td><td>같음</td><td>큰 캐시로 VRAM 접근을 줄임</td><td>큰 캐시로 기다림 자체를 줄임</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>GPU의 캐시는 CPU처럼 기다림을 없애는 장치가 아니라, VRAM으로 가는 길을 덜 붐비게 하는 장치입니다.</b> 기다림은 여전히 많은 warp로 숨깁니다.</div>
+</section>
+
+<section class="ch" id="s4-10">
+  <div class="ch-head"><span class="ch-num">4.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. L2가 계속 커집니다</h3>
+  <div class="prose"><ul>
+    <li>H100은 50MB였고, Blackwell GB200은 칩 두 개를 합쳐 126MB입니다. NVIDIA의 Blackwell 튜닝 가이드에 나온 값입니다.</li>
+    <li>작은 배치의 LLM 추론처럼 같은 데이터를 자주 다시 읽는 일에서 L2 적중률이 성능을 크게 좌우합니다.</li>
+  </ul></div>
+  <h3>2. AMD는 L2 뒤에 큰 캐시를 둡니다</h3>
+  <div class="prose"><ul>
+    <li>AMD MI355X는 계산 조각 8개에 L2를 4MB씩 두고, 그 뒤에 모두가 함께 쓰는 Infinity Cache 256MB를 둡니다.</li>
+    <li>NVIDIA와 다르게, 캐시를 한 단계 더 두어 HBM 접근을 줄이는 쪽입니다.</li>
+  </ul></div>
+  <h3>3. <button class="t" data-t="sram">SRAM</button>은 잘 줄지 않습니다</h3>
+  <div class="prose"><ul>
+    <li>TSMC 3나노급 공정에서 SRAM 한 비트의 크기는 5나노와 거의 같습니다. 계산 회로는 계속 작아지는데, 캐시는 같은 용량에 비슷한 면적을 씁니다.</li>
+    <li>그래서 캐시를 크게 늘릴수록 칩 값이 빠르게 오르고, 캐시를 별도 칩으로 만들어 쌓는 방식이 주목받습니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>칩 안 메모리는 늘리기가 점점 비싸집니다.</b> 그래서 같은 크기를 더 잘 쓰는 기술, 즉 Shared Memory 관리, L2 지정, 커널 퓨전이 함께 중요해집니다.</div>
+  <p class="prose">여기까지가 GPU 메모리의 칸들이었습니다. 각 칸 사이를 데이터가 얼마나 빨리, 얼마나 많이 오가는지, 즉 대역폭과 지연은 6회차에서 다룹니다.</p>
+</section>
+
+<section class="ch" id="refs">
+  <div class="ch-head"><span class="ch-num">+</span><h2>참고</h2></div>
+  <div class="prose"><ul>
+    <li><a href="https://docs.nvidia.com/cuda/cuda-c-programming-guide/" target="_blank" rel="noopener">CUDA C++ Programming Guide — Memory Hierarchy</a></li>
+    <li><a href="https://docs.nvidia.com/cuda/cuda-c-best-practices-guide/" target="_blank" rel="noopener">CUDA C++ Best Practices Guide — Memory Optimizations</a></li>
+    <li><a href="https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/" target="_blank" rel="noopener">NVIDIA Hopper Architecture In-Depth</a></li>
+    <li><a href="https://docs.nvidia.com/cuda/archive/13.3.0/blackwell-tuning-guide/index.html" target="_blank" rel="noopener">Tuning CUDA Applications for Blackwell (L2 126MB)</a></li>
+    <li><a href="https://developer.nvidia.com/blog/inside-the-nvidia-rubin-platform-six-new-chips-one-ai-supercomputer/" target="_blank" rel="noopener">Inside the NVIDIA Vera Rubin Platform (2026)</a></li>
+    <li><a href="https://news.samsung.com/uk/samsung-begins-shipment-of-industry-first-hbm4e-samples" target="_blank" rel="noopener">Samsung — HBM4E 샘플 출하 (2026.5)</a></li>
+    <li><a href="https://videocardz.com/newz/sk-hynix-ships-12-layer-hbm4e-samples-with-16-gbps-per-pin-speed" target="_blank" rel="noopener">SK hynix 12단 HBM4E 샘플 출하 (2026.6)</a></li>
+    <li><a href="https://rocm.docs.amd.com/en/latest/reference/gpu-arch/mi350.html" target="_blank" rel="noopener">AMD Instinct MI350 Series microarchitecture (ROCm)</a></li>
+    <li><a href="https://developer.nvidia.com/blog/simplify-gpu-programming-with-nvidia-cuda-tile-in-python" target="_blank" rel="noopener">Simplify GPU Programming with NVIDIA CUDA Tile in Python</a></li>
+    <li><a href="https://docs.nvidia.com/cuda/cuda-programming-guide/02-basics/writing-tile-kernels.html" target="_blank" rel="noopener">CUDA Programming Guide — Writing Tile Kernels</a></li>
+    <li><a href="https://cvw.cac.cornell.edu/gpu-architecture/horizon-gpus-blackwell-b200/b200_sm" target="_blank" rel="noopener">Cornell Virtual Workshop — B200 SM (TMEM)</a></li>
+    <li><a href="https://fuse.wikichip.org/?p=7343" target="_blank" rel="noopener">WikiChip — IEDM 2022: SRAM scaling</a></li>
+    <li><a href="https://arxiv.org/abs/2205.14135" target="_blank" rel="noopener">FlashAttention 논문</a></li>
+  </ul></div>
+</section>
+
+<nav class="pager" id="pager" data-no="5" aria-label="회차 이동"></nav>
+</main>
+</div>
+
+<footer class="site"><div class="container">자료의 오류나 보충할 내용은 <a href="https://github.com/designerbohyun/domain-study/issues">GitHub 이슈</a>로 알려 주세요.</div></footer>
+<script src="../assets/terms.js"></script>
+<script src="../assets/sessions.js"></script>
+<script src="../assets/site.js"></script>
+<script type="module">
+import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.esm.min.mjs";
+const t = document.documentElement.getAttribute("data-theme");
+const dark = t ? t === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+mermaid.initialize({ startOnLoad: false, theme: dark ? "dark" : "neutral", fontFamily: "inherit" });
+// ponytail: theme set at load; toggling theme needs a reload to recolor diagrams
+let i = 0;
+for (const el of document.querySelectorAll("pre.mermaid")) {
+  const { svg } = await mermaid.render("mmd" + i++, el.textContent);
+  const box = document.createElement("div");
+  box.className = "mmd";
+  box.innerHTML = svg;
+  el.replaceWith(box);
+}
+</script>
+</body>
+</html>

@@ -71,3 +71,110 @@ function el(tag,attrs,parent,text){const n=document.createElementNS(ns,tag);for(
   run();
 })();
 
+
+/* 구조도 (1.3, 2.3, 3.3, 4.3) */
+const R=(p,x,y,w,h,a={})=>el('rect',Object.assign({x,y,width:w,height:h,rx:a.rx??4},a),p);
+const T=(p,x,y,s,a={})=>el('text',Object.assign({x,y,'font-size':a.fs??11,fill:'var(--ink)'},a),p,s);
+const L=(p,x1,y1,x2,y2,a={})=>el('line',Object.assign({x1,y1,x2,y2,stroke:'var(--muted)','stroke-width':1},a),p);
+
+/* 1.3 칩 → GPC → TPC → SM */
+(function(){
+  const s=document.getElementById('hierSvg'); if(!s) return;
+  const P=(x,w,title,foot)=>{R(s,x,24,w,120,{rx:8,fill:'var(--sunk)',stroke:'var(--line)'});T(s,x+w/2,16,title,{'text-anchor':'middle',fill:'var(--muted)'});T(s,x+w/2,164,foot,{'text-anchor':'middle','font-weight':700,fs:12});};
+  P(10,200,'GPU 칩 (H100)','GPC 8개');
+  for(let i=0;i<8;i++){const x=22+(i%4)*46,y=36+Math.floor(i/4)*54,on=i===3;
+    R(s,x,y,40,48,{fill:on?'var(--accent)':'none','fill-opacity':on?.18:1,stroke:on?'var(--accent)':'var(--line)','stroke-width':on?2:1});
+    T(s,x+20,y+28,'GPC',{'text-anchor':'middle',fs:9,fill:'var(--muted)'});}
+  P(240,170,'GPC 하나','TPC 9개');
+  for(let i=0;i<9;i++){const x=252+(i%3)*52,y=34+Math.floor(i/3)*38,on=i===2;
+    R(s,x,y,46,32,{fill:on?'var(--accent)':'none','fill-opacity':on?.18:1,stroke:on?'var(--accent)':'var(--line)','stroke-width':on?2:1});
+    T(s,x+23,y+20,'TPC',{'text-anchor':'middle',fs:9,fill:'var(--muted)'});}
+  P(440,110,'TPC 하나','SM 2개');
+  [452,500].forEach(x=>{R(s,x,36,40,96,{fill:'var(--accent)'});T(s,x+20,88,'SM',{'text-anchor':'middle',fill:'var(--surface)','font-weight':700});});
+  const z={stroke:'var(--accent)','stroke-dasharray':'3 3','stroke-opacity':.7};
+  L(s,200,36,240,24,z);L(s,200,84,240,144,z);L(s,402,34,440,24,z);L(s,402,66,440,144,z);
+  T(s,566,70,'설계상',{fill:'var(--muted)'});T(s,566,92,'SM 144개',{fs:14,'font-weight':700});T(s,566,112,'켜진 SM 132개',{fill:'var(--muted)'});
+  s.setAttribute('viewBox','0 0 640 176');
+})();
+
+/* 1.3 SM 하나의 구성과 메모리 */
+(function(){
+  const s=document.getElementById('smSvg'); if(!s) return;
+  R(s,8,8,624,250,{rx:10,fill:'var(--sunk)',stroke:'var(--line)'});
+  T(s,20,28,'SM 하나 (H100)',{'font-weight':700,fs:12});
+  for(let q=0;q<4;q++){const x=20+q*154;
+    R(s,x,40,146,170,{rx:6,fill:'var(--surface)',stroke:'var(--line)'});
+    T(s,x+10,56,`구역 ${q+1}`,{fill:'var(--muted)'});
+    R(s,x+8,62,130,18,{rx:3,fill:'var(--idle)'});T(s,x+73,75,'Warp Scheduler',{'text-anchor':'middle',fs:10});
+    for(let i=0;i<32;i++) R(s,x+10+(i%8)*16,88+Math.floor(i/8)*16,13,13,{rx:2,fill:'var(--accent)'});
+    R(s,x+8,156,130,18,{rx:3,fill:'var(--tensor)'});T(s,x+73,169,'Tensor Core',{'text-anchor':'middle',fs:10,fill:'var(--surface)'});
+    R(s,x+8,180,130,18,{rx:3,fill:'var(--mem)'});T(s,x+73,193,'레지스터 64KB',{'text-anchor':'middle',fs:10,fill:'var(--surface)'});}
+  R(s,20,220,608,26,{rx:4,fill:'var(--mem)'});T(s,324,237,'Shared Memory 최대 228KB · 같은 블록의 스레드가 함께 씁니다',{'text-anchor':'middle',fill:'var(--surface)'});
+  L(s,320,258,320,270);
+  R(s,120,270,400,26,{rx:4,fill:'var(--mem)','fill-opacity':.6});T(s,320,287,'L2 캐시 50MB · 모든 SM이 함께 씁니다',{'text-anchor':'middle'});
+  L(s,320,296,320,308);
+  R(s,40,308,560,26,{rx:4,fill:'var(--mem)','fill-opacity':.3});T(s,320,325,'VRAM 80GB · 모델과 데이터가 있습니다',{'text-anchor':'middle'});
+  s.setAttribute('viewBox','0 0 640 342');
+})();
+
+/* 2.3 구역 하나의 계산 유닛 */
+(function(){
+  const s=document.getElementById('quadSvg'); if(!s) return;
+  R(s,8,8,430,232,{rx:10,fill:'var(--sunk)',stroke:'var(--line)'});
+  T(s,20,28,'SM의 구역 하나 (H100)',{'font-weight':700,fs:12});
+  R(s,20,38,406,20,{rx:3,fill:'var(--idle)'});T(s,223,52,'Warp Scheduler',{'text-anchor':'middle',fs:10});
+  const row=(y,name,n,a)=>{T(s,20,y+11,name,{fs:11});for(let i=0;i<n;i++)R(s,138+(i%16)*18,y+Math.floor(i/16)*18,14,14,Object.assign({rx:2},a));};
+  row(68,'FP32 · 32개',32,{fill:'var(--accent)'});T(s,20,97,'= CUDA Core',{fs:10,fill:'var(--muted)'});
+  row(110,'INT32 · 16개',16,{fill:'var(--off)'});
+  row(134,'FP64 · 16개',16,{fill:'var(--accent)','fill-opacity':.4});
+  row(158,'SFU · 4개',4,{fill:'none',stroke:'var(--muted)'});
+  T(s,20,193,'Tensor Core · 1개',{fs:11});R(s,138,182,140,16,{rx:3,fill:'var(--tensor)'});
+  R(s,20,210,406,20,{rx:3,fill:'var(--mem)'});T(s,223,224,'레지스터 64KB',{'text-anchor':'middle',fs:10,fill:'var(--surface)'});
+  R(s,454,8,178,232,{rx:10,fill:'none',stroke:'var(--line)'});
+  T(s,468,32,'구역 4개 = SM 하나',{'font-weight':700,fs:12});
+  [['FP32 (CUDA Core)','128개'],['INT32','64개'],['FP64','64개'],['SFU','16개'],['Tensor Core','4개'],['레지스터','256KB']].forEach(([k,v],i)=>{
+    const y=60+i*28;T(s,468,y,k,{fill:'var(--muted)'});T(s,620,y,v,{'text-anchor':'end','font-weight':700});});
+  s.setAttribute('viewBox','0 0 640 248');
+})();
+
+/* 3.3 CUDA Core와 Tensor Core의 명령 한 번 */
+(function(){
+  const s=document.getElementById('coreSvg'); if(!s) return;
+  R(s,8,8,232,170,{rx:10,fill:'var(--sunk)',stroke:'var(--line)'});
+  T(s,20,30,'CUDA Core · 명령 한 번',{'font-weight':700,fs:12});
+  [['a',22],['b',70],['c',118]].forEach(([k,x])=>{R(s,x,72,26,26,{fill:'var(--surface)',stroke:'var(--line)'});T(s,x+13,90,k,{'text-anchor':'middle'});});
+  [['×',59],['+',107],['=',155]].forEach(([k,x])=>T(s,x,90,k,{'text-anchor':'middle',fill:'var(--muted)',fs:13}));
+  R(s,170,72,26,26,{fill:'var(--accent)'});
+  T(s,124,138,'숫자 1개 · 곱셈 1번',{'text-anchor':'middle','font-weight':700});
+  R(s,252,8,380,170,{rx:10,fill:'var(--sunk)',stroke:'var(--line)'});
+  T(s,264,30,'Tensor Core · 명령 한 번',{'font-weight':700,fs:12});
+  const G=(x,lab,a)=>{for(let i=0;i<16;i++)R(s,x+(i%4)*12,60+Math.floor(i/4)*12,10,10,Object.assign({rx:1.5},a));T(s,x+23,124,lab,{'text-anchor':'middle',fill:'var(--muted)',fs:10});};
+  G(272,'A',{fill:'var(--tensor)','fill-opacity':.4});G(352,'B',{fill:'var(--tensor)','fill-opacity':.4});
+  G(432,'C',{fill:'var(--idle)'});G(512,'결과',{fill:'var(--tensor)'});
+  [['×',334],['+',414],['=',494]].forEach(([k,x])=>T(s,x,88,k,{'text-anchor':'middle',fill:'var(--muted)',fs:13}));
+  T(s,442,152,'행렬 한 덩어리 · 곱셈 64번',{'text-anchor':'middle','font-weight':700});
+  s.setAttribute('viewBox','0 0 640 186');
+})();
+
+/* 4.3 warp 자리 64개 */
+(function(){
+  const s=document.getElementById('slotSvg'); if(!s) return;
+  for(let i=0;i<64;i++) R(s,12+(i%16)*26,12+Math.floor(i/16)*22,22,18,{rx:3,fill:i<32?'var(--accent)':'var(--idle)'});
+  T(s,520,58,'50%',{'text-anchor':'middle',fs:34,'font-weight':700,fill:'var(--accent)'});
+  T(s,520,82,'32 ÷ 64',{'text-anchor':'middle',fill:'var(--muted)',fs:13});
+  s.setAttribute('viewBox','0 0 640 104');
+})();
+
+/* 4.3 네 가지 한도 */
+(function(){
+  const s=document.getElementById('limitSvg'); if(!s) return;
+  const rows=[['warp 수','64 ÷ 블록당 8',8],['블록 수','최대 32',32],['레지스터','65,536 ÷ 블록당 16,384',4],['Shared Memory','228KB ÷ 블록당 32KB',7]];
+  const min=Math.min(...rows.map(r=>r[2]));
+  rows.forEach(([k,d,n],i)=>{const y=12+i*40,hit=n===min;
+    T(s,12,y+11,k,{'font-weight':700});T(s,12,y+27,d,{fs:10,fill:'var(--muted)'});
+    for(let b=0;b<n;b++) R(s,196+b*12,y+2,10,22,{rx:2,fill:hit?'var(--accent)':'var(--off)'});
+    T(s,196+n*12+6,y+18,`${n}블록`+(hit?' · 가장 적음':''),{'font-weight':hit?700:400,fill:hit?'var(--accent)':'var(--ink)'});});
+  L(s,12,174,628,174,{stroke:'var(--line)'});
+  T(s,12,196,'올라가는 블록 4개 × 블록당 warp 8개 = warp 32개 · 점유율 50%',{'font-weight':700});
+  s.setAttribute('viewBox','0 0 640 208');
+})();

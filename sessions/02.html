@@ -81,11 +81,11 @@
       <li>H100은 GPC가 8개라서, 설계상 SM이 144개입니다. 이 중 H100 SXM은 132개를 켭니다.</li>
     </ul>
   </div>
-  <figure class="fig"><pre class="mermaid">flowchart LR
-  GPU["GPU 칩 (H100)"] -->|8개| GPC["GPC"]
-  GPC -->|9개씩| TPC["TPC"]
-  TPC -->|2개씩| SM["SM"]
-  SM -.- N["8 × 9 × 2 = 144개&lt;br&gt;켜진 것은 132개"]</pre></figure>
+  <figure class="fig">
+    <div class="fig-title">칩 → GPC → TPC → SM</div>
+    <div class="scroll-x"><svg id="hierSvg" viewBox="0 0 640 200" width="100%" style="min-width:520px" role="img" aria-label="GPU 칩 안에 GPC 8개, GPC 안에 TPC 9개, TPC 안에 SM 2개"></svg></div>
+    <figcaption>칩 안에 GPC 8개, GPC 안에 TPC 9개, TPC 안에 SM 2개가 들어 있습니다. 8 × 9 × 2 = 144개이고, H100 SXM은 이 중 132개를 켭니다.</figcaption>
+  </figure>
   <figure class="fig">
     <div class="fig-title">H100 칩 안의 SM 배치 (144개 중 132개 켜짐)</div>
     <div class="split">
@@ -106,22 +106,12 @@
 
   <h3>2. SM 안의 구성</h3>
   <p class="prose">SM은 네 구역으로 나뉩니다.</p>
-  <figure class="fig"><pre class="mermaid">flowchart TB
-  subgraph SM["SM 하나 (H100)"]
-    direction TB
-    subgraph Q[" "]
-      direction LR
-      Q1["구역 1&lt;br&gt;Warp Scheduler 1&lt;br&gt;CUDA Core 32&lt;br&gt;Tensor Core 1"]
-      Q2["구역 2&lt;br&gt;Warp Scheduler 1&lt;br&gt;CUDA Core 32&lt;br&gt;Tensor Core 1"]
-      Q3["구역 3&lt;br&gt;Warp Scheduler 1&lt;br&gt;CUDA Core 32&lt;br&gt;Tensor Core 1"]
-      Q4["구역 4&lt;br&gt;Warp Scheduler 1&lt;br&gt;CUDA Core 32&lt;br&gt;Tensor Core 1"]
-      Q1 ~~~ Q2 ~~~ Q3 ~~~ Q4
-    end
-    M["레지스터 256KB · Shared Memory 최대 228KB"]
-    Q ~~~ M
-  end
-  SM --> L2["L2 캐시 50MB&lt;br&gt;모든 SM이 함께 씁니다"]
-  L2 --> V["VRAM 80GB"]</pre></figure>
+  <figure class="fig">
+    <div class="fig-title">SM 하나의 구성과 메모리</div>
+    <div class="scroll-x"><svg id="smSvg" viewBox="0 0 640 200" width="100%" style="min-width:560px" role="img" aria-label="SM은 구역 4개로 나뉘고, 구역마다 Warp Scheduler, CUDA Core 32개, Tensor Core 1개, 레지스터가 있습니다. 아래에 Shared Memory, L2 캐시, VRAM이 있습니다."></svg></div>
+    <div class="legend"><span><i class="sw" style="background:var(--accent)"></i>CUDA Core</span><span><i class="sw" style="background:var(--tensor)"></i>Tensor Core</span><span><i class="sw" style="background:var(--idle)"></i>Warp Scheduler</span><span><i class="sw" style="background:var(--mem)"></i>메모리</span></div>
+    <figcaption>칸 하나가 CUDA Core 하나입니다. 구역마다 32개, SM 하나에 128개입니다. 레지스터는 구역마다 64KB, SM 하나에 256KB입니다. 아래로 갈수록 계산 유닛에서 멀고, 크고, 느립니다.</figcaption>
+  </figure>
   <div class="tbl"><table>
     <thead><tr><th>구성</th><th>하는 일</th><th>H100 SM 1개당</th></tr></thead>
     <tbody>
@@ -421,16 +411,11 @@
       <li>같은 구역에는 다른 계산 유닛도 있습니다.</li>
     </ul>
   </div>
-  <figure class="fig"><pre class="mermaid">flowchart LR
-  subgraph Z["SM의 구역 하나 (H100)"]
-    direction LR
-    A["FP32 = CUDA Core&lt;br&gt;32개"]
-    B["INT32&lt;br&gt;16개"]
-    C["FP64&lt;br&gt;16개"]
-    D["SFU&lt;br&gt;4개"]
-    E["Tensor Core&lt;br&gt;1개"]
-  end
-  Z -.- N["구역 4개를 합치면&lt;br&gt;아래 표의 SM 1개당 개수입니다"]</pre></figure>
+  <figure class="fig">
+    <div class="fig-title">SM의 구역 하나에 있는 계산 유닛</div>
+    <div class="scroll-x"><svg id="quadSvg" viewBox="0 0 640 200" width="100%" style="min-width:560px" role="img" aria-label="SM의 구역 하나에 있는 계산 유닛"></svg></div>
+    <figcaption>칸 하나가 유닛 하나입니다. 구역 4개를 합치면 오른쪽의 SM 하나 개수가 됩니다.</figcaption>
+  </figure>
   <div class="tbl"><table>
     <thead><tr><th>구성</th><th>하는 일</th><th>H100 SM 1개당</th></tr></thead>
     <tbody>
@@ -629,15 +614,12 @@
     </tbody>
   </table></div>
   <div class="prose"><ul><li>행렬 곱셈은 Tensor Core가, 나머지는 CUDA Core가 합니다.</li></ul></div>
-  <figure class="fig"><pre class="mermaid">flowchart LR
-  subgraph C1["CUDA Core · 명령 한 번"]
-    direction LR
-    a["숫자 a × b + c"] --> r1["숫자 1개"]
-  end
-  subgraph C2["Tensor Core · 명령 한 번"]
-    direction LR
-    m["작은 행렬 A × B + C"] --> r2["행렬 한 덩어리&lt;br&gt;곱셈 수십에서 수백 번"]
-  end</pre></figure>
+  <figure class="fig">
+    <div class="fig-title">명령 한 번에 하는 일</div>
+    <div class="scroll-x"><svg id="coreSvg" viewBox="0 0 640 200" width="100%" style="min-width:540px" role="img" aria-label="명령 한 번에 하는 일"></svg></div>
+    <div class="legend"><span><i class="sw" style="background:var(--accent)"></i>CUDA Core 결과</span><span><i class="sw" style="background:var(--tensor)"></i>Tensor Core 결과</span></div>
+    <figcaption>Tensor Core 쪽은 4 × 4 행렬로 단순화한 예시입니다. 실제 행렬 크기와 곱셈 횟수는 세대와 정밀도마다 다릅니다.</figcaption>
+  </figure>
 </section>
 
 <section class="ch" id="s3-4">
@@ -849,19 +831,22 @@
   <div class="prose"><ul>
     <li>점유율은 대기 중인 warp 수 나누기 최대 warp 수입니다. H100은 최대 64개라서, 32개면 50%입니다.</li>
   </ul></div>
-  <figure class="fig"><pre class="mermaid">pie title SM 하나의 warp 자리 64개 중 32개가 차면 점유율 50%
-  "대기 중인 warp" : 32
-  "빈 자리" : 32</pre></figure>
+  <figure class="fig">
+    <div class="fig-title">SM 하나의 warp 자리 64개</div>
+    <div class="scroll-x"><svg id="slotSvg" viewBox="0 0 640 200" width="100%" style="min-width:480px" role="img" aria-label="SM 하나의 warp 자리 64개"></svg></div>
+    <div class="legend"><span><i class="sw" style="background:var(--accent)"></i>대기 중인 warp</span><span><i class="sw" style="background:var(--idle)"></i>빈 자리</span></div>
+    <figcaption>칸 하나가 warp 자리 하나입니다. 32개가 차면 점유율은 50%입니다.</figcaption>
+  </figure>
   <div class="prose"><ul>
     <li>SM에는 아래 네 가지 한도가 있습니다. 블록을 하나씩 올리다가, 넷 중 하나라도 바닥나면 더 올릴 수 없습니다.</li>
     <li>그래서 블록을 가장 적게 허용하는 한도가 점유율을 정합니다.</li>
   </ul></div>
-  <figure class="fig"><pre class="mermaid">flowchart LR
-  W["warp 수&lt;br&gt;최대 64"] --> F{"블록을 가장 적게&lt;br&gt;허용하는 한도"}
-  B["블록 수&lt;br&gt;최대 32"] --> F
-  R["레지스터&lt;br&gt;65,536개"] --> F
-  S["Shared Memory&lt;br&gt;최대 228KB"] --> F
-  F --> O["SM에 올라가는 warp 수&lt;br&gt;= 점유율"]</pre></figure>
+  <figure class="fig">
+    <div class="fig-title">네 가지 한도가 허용하는 블록 수</div>
+    <div class="scroll-x"><svg id="limitSvg" viewBox="0 0 640 200" width="100%" style="min-width:540px" role="img" aria-label="네 가지 한도가 허용하는 블록 수"></svg></div>
+    <div class="legend"><span><i class="sw" style="background:var(--accent)"></i>점유율을 정하는 한도</span><span><i class="sw" style="background:var(--off)"></i>여유가 남는 한도</span></div>
+    <figcaption>예시입니다. 블록 하나를 스레드 256개, 즉 warp 8개로 두고, 스레드당 레지스터 64개, 블록당 Shared Memory 32KB를 쓴다고 잡았습니다.</figcaption>
+  </figure>
   <div class="tbl"><table>
     <thead><tr><th>한도</th><th>H100 SM 1개당</th></tr></thead>
     <tbody>

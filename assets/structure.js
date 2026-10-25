@@ -38,10 +38,10 @@
     sfu: { name: "SFU", desc: "sin, exp 같은 함수를 계산하는 유닛입니다. 구역마다 4개입니다.", s: [2], 구성: ["sfu"] },
     ldst: { name: "LD/ST (메모리 읽기·쓰기)", desc: "레지스터와 메모리 사이에 값을 읽고 쓰는 유닛입니다. warp의 32개 스레드가 이웃한 주소를 읽으면 한 번에 끝납니다.", s: [3, 6], 개념: ["coalescing", "localmem"] },
     // 실행: 프로그램 쪽 단위
-    xgrid: { name: "그리드 (커널 한 번)", desc: "커널 한 번 실행에 쓰이는 블록 전체입니다. GPU 칩 전체에 퍼져 실행됩니다.", s: [3], hw: "chip", 구성: ["kernel", "grid"], 개념: ["gridstride", "stream", "cudagraphs", "persistent", "megakernel", "fusion"], 지표: ["nsight"] },
-    xblock: { name: "블록 (Thread Block)", desc: "스레드 최대 1,024개의 묶음입니다. SM 하나에 올라가 Shared Memory를 함께 씁니다.", s: [2, 3], hw: "sm", 구성: ["block"], 개념: ["cluster", "coopgroups", "smem", "race", "atomic"] },
-    xwarp: { name: "Warp", desc: "같은 명령을 함께 실행하는 32개 스레드입니다. Warp Scheduler가 명령을 주는 단위입니다.", s: [2, 3], hw: "scheduler", 구성: ["warp"], 개념: ["simt", "divergence", "shuffle", "warpspec"] },
-    xthread: { name: "스레드", desc: "커널 코드를 실행하는 가장 작은 단위입니다. 레지스터를 따로 갖고, 계산 유닛 한 칸에서 실행됩니다.", s: [3], hw: "cudacore", 구성: ["thread"], 개념: ["register", "race"] },
+    xgrid: { name: "그리드 (커널 한 번)", desc: "커널 한 번 실행으로 만들어지는 블록 전체입니다. GigaThread Engine이 블록을 빈 SM에 나눠 주고, 한 번에 다 못 올라가면 wave로 나눠 실행합니다. 예: 숫자 100만 개에 2 곱하기는 블록 3,907개입니다.", s: [3], hw: "chip", 구성: ["kernel", "grid"], 개념: ["gridstride", "stream", "cudagraphs", "persistent", "megakernel", "fusion", "spmd", "wave", "tail"], 지표: ["nsight"] },
+    xblock: { name: "블록 (Thread Block)", desc: "스레드 최대 1,024개의 묶음입니다. SM 하나에 올라가 끝날 때까지 머물고, Shared Memory를 함께 씁니다. 블록끼리는 서로 독립입니다. 예: 스레드 256개, warp 8개.", s: [2, 3], hw: "sm", 구성: ["block"], 개념: ["cluster", "coopgroups", "smem", "race", "atomic", "deadlock"] },
+    xwarp: { name: "Warp", desc: "같은 명령을 함께 실행하는 32개 스레드입니다. 하드웨어가 블록을 번호 순서대로 32개씩 잘라 만들고, Warp Scheduler가 명령을 주는 단위입니다. 예: 블록 하나에 8개.", s: [2, 3], hw: "scheduler", 구성: ["warp", "lane"], 개념: ["simt", "divergence", "coalescing", "shuffle", "warpspec", "soa"] },
+    xthread: { name: "스레드", desc: "커널 코드를 실행하는 가장 작은 단위입니다. 자기 번호로 맡을 데이터를 찾고, 레지스터를 따로 가지며, 계산 유닛 한 칸에서 실행됩니다. 예: 숫자 1개.", s: [3], hw: "cudacore", 구성: ["thread"], 개념: ["register", "race"] },
     // 소프트웨어 층
     sapp: { name: "프레임워크 · 앱", desc: "PyTorch, vLLM처럼 사용자가 직접 쓰는 층입니다. 아래 라이브러리를 불러 GPU를 씁니다.", s: [17, 20], 개념: ["fusion", "mixed"] },
     slib: { name: "라이브러리", desc: "행렬 곱셈, 합성곱, GPU 간 통신처럼 자주 쓰는 계산을 미리 빠르게 만들어 둔 묶음입니다.", s: [1, 2, 10], 구성: ["cublas", "cudnn", "nccl", "tensorrt", "te"] },

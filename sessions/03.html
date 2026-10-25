@@ -21,11 +21,33 @@
 <header class="doc-head">
   <div class="crumb"><a href="../">스터디 목차</a> / GPU 기본 구조 / 3회차</div>
   <h1>3회차 · Kernel, Thread, Block, Grid, Warp</h1>
-  <p>지난 2회차에서는 SM 안을 들여다봤습니다. 블록이 SM에 배정되고, Warp Scheduler가 warp를 골라 실행한다는 것까지 봤습니다. 오늘은 그 일감이 어떻게 만들어지는지, 프로그래머 쪽에서 보이는 단위를 차례로 보겠습니다.</p>
+  <p>지난 2회차에서는 SM 안을 들여다봤습니다. 블록이 SM에 배정되고, Warp Scheduler가 warp를 골라 실행한다는 것까지 봤습니다. 오늘은 그 일감이 프로그램 쪽에서 어떻게 쪼개지는지 보겠습니다. 2회차 1.4 표에서 이름만 보고 지나간 커널, 블록, warp, 스레드가 오늘의 주인공입니다.</p>
+  <h3>오늘의 예시: 숫자 100만 개에 2 곱하기</h3>
+  <p>오늘은 예시 하나를 끝까지 들고 가겠습니다. 숫자 100만 개가 든 배열이 있고, 모든 숫자에 2를 곱하려고 합니다.</p>
   <ul>
-    <li>커널을 한 번 실행하면 그리드가 하나 만들어집니다.</li>
-    <li>그리드는 여러 블록으로, 블록은 여러 스레드로 이루어집니다.</li>
-    <li>하드웨어는 스레드를 32개씩 묶은 warp 단위로 실제 실행합니다.</li>
+    <li>CPU는 반복문으로 숫자를 하나씩, 100만 번 곱합니다.</li>
+    <li>GPU는 숫자 하나마다 작은 실행 흐름, 즉 스레드를 하나씩 붙여서 한꺼번에 곱합니다.</li>
+    <li>오늘 볼 다섯 단어는 이 일을 나누는 단위입니다.</li>
+  </ul>
+  <div class="tbl"><table>
+    <thead><tr><th>단위</th><th>한 줄 뜻</th><th>오늘 예시에서</th></tr></thead>
+    <tbody>
+      <tr><td>Kernel (커널)</td><td>GPU에서 돌릴 함수</td><td>"숫자에 2를 곱하라"는 함수 <code>scale</code></td></tr>
+      <tr><td>Grid (그리드)</td><td>커널 한 번 실행으로 만들어지는 블록 전체</td><td class="num">블록 3,907개</td></tr>
+      <tr><td>Block (블록)</td><td>같은 SM에서 함께 도는 스레드 묶음</td><td class="num">스레드 256개</td></tr>
+      <tr><td>Thread (스레드)</td><td>함수를 실행하는 가장 작은 단위</td><td>숫자 1개를 맡음</td></tr>
+      <tr><td>Warp (워프)</td><td>하드웨어가 실제로 한꺼번에 돌리는 스레드 32개</td><td class="num">블록 하나에 warp 8개</td></tr>
+    </tbody>
+  </table></div>
+  <figure class="fig">
+    <div class="fig-title">커널 한 번이 스레드까지 쪼개지는 모습</div>
+    <div class="scroll-x"><svg id="hierSvg" viewBox="0 0 640 220" width="100%" style="min-width:560px" role="img" aria-label="커널 한 번은 그리드 하나가 되고, 그리드는 블록 3,907개, 블록은 warp 8개, warp는 스레드 32개로 나뉩니다"></svg></div>
+    <div class="legend"><span><i class="sw" style="background:var(--accent)"></i>프로그래머가 정하는 단위</span><span><i class="sw" style="background:var(--tensor)"></i>하드웨어가 정하는 단위 (warp)</span></div>
+    <figcaption>왼쪽에서 오른쪽으로 한 칸씩 확대한 그림입니다. 강조한 칸이 다음 칸으로 확대됩니다.</figcaption>
+  </figure>
+  <ul>
+    <li>커널, 그리드, 블록, 스레드는 프로그래머가 정합니다.</li>
+    <li>warp만 하드웨어가 정합니다.</li>
   </ul>
   <div class="tbl wide"><table>
     <thead><tr><th>단위</th><th>누가 정하나</th><th>실행되는 곳</th><th>내장 변수</th><th>한계 (H100 기준)</th></tr></thead>
@@ -36,7 +58,11 @@
       <tr><td>Warp</td><td>하드웨어</td><td>Warp Scheduler</td><td><code>warpSize</code></td><td>항상 32 스레드</td></tr>
     </tbody>
   </table></div>
-  <p>진행 순서는 1, 2회차와 같습니다. 기준 제품도 같은 NVIDIA <button class="t" data-t="h100">H100</button> SXM입니다.</p>
+  <p>기준 제품은 1, 2회차와 같은 NVIDIA <button class="t" data-t="h100">H100</button> SXM입니다. 진행 순서도 같습니다.</p>
+  <details>
+    <summary>Q. 기초 · 내장 변수는 무엇인가요?</summary>
+    <div class="prose"><p>코드에서 따로 만들지 않아도 바로 꺼내 쓸 수 있는 값입니다. 스레드는 이 값을 보고 "나는 몇 번째 블록의 몇 번째 스레드인지" 압니다. 2.4에서 직접 써 봅니다.</p></div>
+  </details>
   <div class="flow" aria-label="주제별 진행 순서">
     <span><b>1</b>정의</span><span><b>2</b>등장 배경</span><span><b>3</b>구조</span><span><b>4</b>작동 방식</span><span><b>5</b>이점</span><span><b>6</b>부재 시 문제</span><span><b>7</b>단점</span><span><b>8</b>대안 기술</span><span><b>9</b>대안과의 비교</span><span><b>10</b>최신 트렌드</span>
   </div>
@@ -51,24 +77,33 @@
 
 <section class="ch" id="s1-1">
   <div class="ch-head"><span class="ch-num">1.1</span><h2>정의</h2></div>
-  <p class="lead"><button class="t" data-t="kernel">커널</button>은 <b>CPU가 실행을 지시하고, GPU의 수많은 스레드가 함께 실행하는 함수</b>입니다.</p>
+  <p class="lead"><button class="t" data-t="kernel">커널</button>은 <b>CPU가 실행을 지시하고, GPU의 수많은 스레드가 똑같이 실행하는 함수</b>입니다.</p>
   <div class="prose"><ul>
+    <li>코드에는 숫자 하나에 할 일만 적습니다. 오늘 예시에서는 "내 숫자에 2를 곱한다" 한 줄입니다.</li>
+    <li>실행하면 수천에서 수백만 개의 스레드가 이 코드를 각자 다른 숫자에 실행합니다.</li>
     <li>CUDA C++에서는 함수 앞에 <code>__global__</code>을 붙여 커널로 만듭니다.</li>
-    <li>코드에는 스레드 하나가 할 일만 적습니다. 실행할 때 수천에서 수백만 개 스레드가 같은 코드를 각자 다른 데이터에 실행합니다.</li>
-    <li>이런 방식을 SPMD, 즉 프로그램 하나에 데이터 여러 개라고 부릅니다.</li>
   </ul></div>
+  <details>
+    <summary>Q. 기초 · 함수는 무엇인가요?</summary>
+    <div class="prose"><p>입력을 받아 정해진 일을 하는 코드 묶음입니다. 한 번 써 두면 이름만 불러서 몇 번이고 실행할 수 있습니다. 운영체제의 커널과는 이름만 같습니다.</p></div>
+  </details>
+  <details>
+    <summary>Q. 이런 실행 방식에 이름이 있나요?</summary>
+    <div class="prose"><p>프로그램 하나를 데이터 여러 개에 동시에 실행하는 방식을 <button class="t" data-t="spmd">SPMD</button>라고 부릅니다. Single Program, Multiple Data의 줄임말입니다.</p></div>
+  </details>
 </section>
 
 <section class="ch" id="s1-2">
   <div class="ch-head"><span class="ch-num">1.2</span><h2>등장 배경</h2></div>
   <div class="prose"><ul>
-    <li>CUDA 이전에는 GPU에 일을 시키려면 그래픽 API를 거쳐야 했습니다.</li>
-    <li>계산을 셰이더, 즉 픽셀마다 실행되는 작은 그래픽 프로그램으로 위장했습니다. 데이터는 텍스처 이미지로 넣고, 결과는 화면 그림으로 받았습니다.</li>
-    <li>"점 하나마다 같은 프로그램을 실행한다"는 발상은 좋았지만, 그래픽 밖에서 쓰기는 불편했습니다.</li>
+    <li><button class="t" data-t="cuda">CUDA</button> 이전에도 GPU는 계산이 빨랐지만, 그림을 그리는 용도로만 쓸 수 있었습니다.</li>
+    <li>그래서 계산을 그림 그리기로 꾸며서 시켰습니다. 숫자는 이미지에 담아 넣고, 결과도 그림으로 받았습니다.</li>
+    <li>계산은 셰이더, 즉 픽셀마다 실행되는 작은 그래픽 프로그램이 맡았습니다.</li>
+    <li>"점 하나마다 같은 프로그램을 실행한다"는 발상은 좋았지만, 그래픽을 모르는 사람은 쓰기 어려웠습니다.</li>
   </ul></div>
   <div class="callout idea">
     <span class="say">"그럼 원소마다 실행되는 함수를, 그래픽과 상관없이 C 코드로 쓰게 하자!"</span>
-    그래서 2006년 <button class="t" data-t="cuda">CUDA</button> 발표와 함께 등장한 것이 바로 <b>커널</b>입니다.
+    그래서 2006년 CUDA 발표와 함께 등장한 것이 바로 <b>커널</b>입니다.
     <ul>
       <li>2007년 첫 CUDA 툴킷이 나오면서, GPU에 보내는 작업 단위가 함수 형태로 정해졌습니다.</li>
       <li>1회차에서 본 배열 더하기 코드가 바로 커널입니다.</li>
@@ -78,8 +113,9 @@
 
 <section class="ch" id="s1-3">
   <div class="ch-head"><span class="ch-num">1.3</span><h2>구조</h2></div>
+  <p class="prose">커널은 세 가지로 이루어집니다. 커널이라는 표시, 실행할 때 적는 크기, 그리고 지시가 GPU까지 가는 길입니다.</p>
   <h3>1. 함수 지정자</h3>
-  <p class="prose">함수 앞에 붙이는 표시로, 누가 부르고 어디서 실행되는지를 정합니다.</p>
+  <p class="prose">함수 앞에 붙이는 표시입니다. 누가 부르고 어디서 실행되는지를 정합니다. 오늘 보는 것은 <code>__global__</code>, 즉 커널입니다.</p>
   <div class="tbl"><table>
     <thead><tr><th>지정자</th><th>누가 부르나</th><th>어디서 실행되나</th></tr></thead>
     <tbody>
@@ -92,10 +128,12 @@
   <p class="prose">커널을 부를 때는 꺾쇠 세 개 안에 실행 구성을 적습니다.</p>
   <pre><code>kernel&lt;&lt;&lt;그리드 크기, 블록 크기, 동적 Shared Memory, 스트림&gt;&gt;&gt;(인자);</code></pre>
   <div class="prose"><ul>
-    <li>앞의 두 값, 즉 블록을 몇 개 만들지와 블록마다 스레드를 몇 개 둘지는 꼭 적습니다.</li>
+    <li>앞의 두 값은 꼭 적습니다. 블록을 몇 개 만들지, 블록마다 스레드를 몇 개 둘지입니다.</li>
+    <li>오늘 예시라면 <code>scale&lt;&lt;&lt;3907, 256&gt;&gt;&gt;</code>입니다. 블록 3,907개를 만들고, 블록마다 스레드 256개를 둡니다.</li>
     <li>뒤의 두 값은 생략할 수 있습니다.</li>
   </ul></div>
   <h3>3. 실행 경로</h3>
+  <p class="prose">CPU의 지시는 네 단계를 거쳐 SM에 닿습니다.</p>
   <div class="tbl"><table>
     <thead><tr><th>단계</th><th>하는 일</th></tr></thead>
     <tbody>
@@ -105,6 +143,11 @@
       <tr><td>SM</td><td>배정받은 블록을 실행</td></tr>
     </tbody>
   </table></div>
+  <figure class="fig">
+    <div class="fig-title">커널 실행 지시가 SM까지 가는 길</div>
+    <div class="scroll-x"><svg id="pathSvg" viewBox="0 0 640 200" width="100%" style="min-width:560px" role="img" aria-label="CPU가 스트림에 지시를 넣고, GigaThread Engine이 블록을 SM 132개에 나눠 줍니다"></svg></div>
+    <figcaption>스트림에는 지시가 줄을 서고, GigaThread Engine은 그리드의 블록을 빈 SM에 하나씩 나눠 줍니다. SM은 일부만 그렸습니다.</figcaption>
+  </figure>
   <details>
     <summary>Q. 기초 · 스트림은 무엇인가요?</summary>
     <div class="prose"><p>GPU에 보낼 작업을 쌓아 두는 대기열입니다. 같은 스트림에 넣은 작업은 순서대로 실행되고, 다른 스트림끼리는 동시에 실행될 수 있습니다. 데이터 복사와 계산을 다른 스트림에 넣어 겹치게 하는 데 많이 씁니다.</p></div>
@@ -113,18 +156,29 @@
 
 <section class="ch" id="s1-4">
   <div class="ch-head"><span class="ch-num">1.4</span><h2>작동 방식</h2></div>
+  <p class="prose">오늘 예시를 코드로 쓰면 이렇습니다.</p>
   <pre><code>__global__ void scale(float* x, float a, int n) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i &lt; n) x[i] = a * x[i];
+    int i = blockIdx.x * blockDim.x + threadIdx.x;  // 내가 맡을 숫자의 번호 (2.4에서 봄)
+    if (i &lt; n) x[i] = a * x[i];                     // 내 숫자에 a를 곱함
 }
-scale&lt;&lt;&lt;(n + 255) / 256, 256&gt;&gt;&gt;(d_x, 2.0f, n);  // CPU는 기다리지 않고 바로 다음 줄로
+scale&lt;&lt;&lt;(n + 255) / 256, 256&gt;&gt;&gt;(d_x, 2.0f, n);  // n = 1,000,000. CPU는 기다리지 않고 바로 다음 줄로
 cudaDeviceSynchronize();                         // GPU 작업이 끝날 때까지 대기</code></pre>
   <div class="prose"><ol>
     <li><b>실행 지시:</b> CPU가 커널 실행을 지시합니다. CPU는 끝나기를 기다리지 않고 바로 다음 줄로 넘어갑니다. 이걸 비동기 실행이라고 합니다.</li>
     <li><b>대기열:</b> 지시는 스트림에 쌓입니다. 같은 스트림의 커널은 순서대로, 다른 스트림의 커널은 동시에 실행될 수 있습니다.</li>
-    <li><b>블록 배정:</b> GigaThread Engine이 블록을 빈 SM에 나눠 줍니다. 2회차 1.4에서 본 블록 배정이 바로 이 부분입니다.</li>
+    <li><b>블록 배정:</b> GigaThread Engine이 블록 3,907개를 빈 SM에 나눠 줍니다. 2회차 1.4에서 본 블록 배정이 바로 이 부분입니다.</li>
     <li><b>결과:</b> 커널이 끝나면 결과는 VRAM에 남습니다. CPU가 결과를 쓰려면 <code>cudaDeviceSynchronize()</code>로 기다리거나 복사 명령을 내립니다.</li>
   </ol></div>
+  <figure class="fig"><pre class="mermaid">sequenceDiagram
+  participant C as CPU
+  participant S as 스트림
+  participant G as GPU
+  C->>S: scale 커널 실행 지시
+  Note over C: 기다리지 않고 다음 일 준비
+  S->>G: 블록 3,907개를 SM에 배정
+  G->>G: 숫자 100만 개 계산
+  C->>G: cudaDeviceSynchronize로 끝날 때까지 대기
+  G-->>C: 끝남. 결과는 VRAM에 있음</pre></figure>
   <details>
     <summary>Q. 왜 커널 실행을 비동기로 하나요?</summary>
     <div class="prose"><p>CPU가 커널마다 끝나기를 기다리면, 그동안 CPU가 놀고 다음 지시도 늦어집니다. 다음 지시가 늦으면 GPU도 놉니다. 지시를 미리 쌓아 두면 GPU는 쉬지 않고 이어서 실행하고, CPU는 그동안 다음 데이터를 준비합니다.</p></div>
@@ -134,7 +188,7 @@ cudaDeviceSynchronize();                         // GPU 작업이 끝날 때까�
 <section class="ch" id="s1-5">
   <div class="ch-head"><span class="ch-num">1.5</span><h2>이점</h2></div>
   <div class="prose"><ul>
-    <li><b>스레드 하나 관점으로 씁니다:</b> 수백만 개 병렬 실행을 함수 하나로 표현합니다.</li>
+    <li><b>스레드 하나 관점으로 씁니다:</b> 수백만 개 병렬 실행을 함수 하나로 표현합니다. 오늘 예시의 계산도 코드 한 줄입니다.</li>
     <li><b>GPU가 바뀌어도 그대로 돕니다:</b> 같은 커널이 SM 24개인 RTX 4060에서도, 132개인 H100에서도 수정 없이 돕니다.</li>
     <li><b>CPU와 겹쳐 일합니다:</b> 비동기 실행이라 CPU는 그동안 다음 일을 준비합니다.</li>
   </ul></div>
@@ -144,7 +198,7 @@ cudaDeviceSynchronize();                         // GPU 작업이 끝날 때까�
   <div class="ch-head"><span class="ch-num">1.6</span><h2>부재 시 문제</h2></div>
   <p class="prose">커널이라는 단위가 없다고 가정해 보면, 이런 문제가 생깁니다.</p>
   <div class="prose"><ul>
-    <li>CPU가 원소마다 반복문을 돌거나, CUDA 이전처럼 그래픽 API로 우회해야 합니다.</li>
+    <li>CPU가 숫자마다 반복문을 돌거나, CUDA 이전처럼 그래픽 기능으로 돌아가야 합니다.</li>
     <li>GPU에 무엇을 시켰고 언제 끝났는지 다룰 단위가 없어, 작업 순서를 관리하기 어렵습니다.</li>
   </ul></div>
 </section>
@@ -152,46 +206,62 @@ cudaDeviceSynchronize();                         // GPU 작업이 끝날 때까�
 <section class="ch" id="s1-7">
   <div class="ch-head"><span class="ch-num">1.7</span><h2>단점</h2></div>
   <div class="prose"><ul>
-    <li><b>실행할 때마다 비용이 듭니다:</b> 커널 한 번을 띄우는 데 수 마이크로초가 걸립니다. 작은 커널을 수천 번 실행하면 GPU보다 CPU의 지시 속도가 병목이 됩니다. LLM이 토큰을 하나씩 만드는 단계가 대표적입니다.</li>
-    <li><b>커널 사이 데이터는 VRAM을 거칩니다:</b> 연산 A가 결과를 VRAM에 쓰고, 연산 B가 다시 읽습니다. 메모리 대역폭을 낭비합니다.</li>
+    <li><b>실행할 때마다 비용이 듭니다:</b> 커널 한 번을 띄우는 데 수 마이크로초가 걸립니다. 작은 커널을 수천 번 실행하면, GPU의 계산보다 CPU가 지시하는 속도가 더 느려집니다. LLM이 답을 토큰 하나씩 만들어 내는 단계가 대표적입니다.</li>
+    <li><b>커널 사이 데이터는 VRAM을 거칩니다:</b> 커널 A가 결과를 VRAM에 쓰고, 커널 B가 다시 읽습니다. 메모리를 오가는 시간이 낭비됩니다. 1.8의 그림에서 봅니다.</li>
     <li><b>디버깅이 어렵습니다:</b> 수천 개 스레드가 동시에 돌아서, 어디서 틀렸는지 찾기 어렵습니다.</li>
   </ul></div>
   <details>
+    <summary>Q. 기초 · 마이크로초는 얼마나 짧은 시간인가요?</summary>
+    <div class="prose"><p>100만 분의 1초입니다. 사람에게는 아주 짧지만, GPU는 그동안 계산을 수천 번 할 수 있습니다. 계산 자체가 이보다 짧으면, 띄우는 비용이 계산보다 커집니다.</p></div>
+  </details>
+  <details>
     <summary>Q. GPU-Util은 높은데 왜 느릴 수 있나요?</summary>
-    <div class="prose"><p>2회차 4.9에서 본 것처럼 <button class="t" data-t="gpuutil">GPU-Util</button>은 커널이 하나라도 돈 시간의 비율입니다. 작은 커널이 연달아 돌면 값은 높게 나오지만, 커널마다 GPU 일부만 쓰거나 커널 사이에 빈 구간이 생깁니다. Nsight Systems 타임라인으로 커널 사이의 빈 구간을 확인합니다.</p></div>
+    <div class="prose"><p>2회차 4.9에서 본 것처럼 <button class="t" data-t="gpuutil">GPU-Util</button>은 커널이 하나라도 돈 시간의 비율입니다. 작은 커널이 연달아 돌면 값은 높게 나오지만, 커널마다 GPU 일부만 쓰거나 커널 사이에 빈 구간이 생깁니다. Nsight Systems라는 도구의 타임라인으로 커널 사이의 빈 구간을 확인합니다.</p></div>
   </details>
 </section>
 
 <section class="ch" id="s1-8">
   <div class="ch-head"><span class="ch-num">1.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
-  <h3>1. <button class="t" data-t="fusion">커널 퓨전</button></h3>
+  <h3>1. 커널 퓨전</h3>
   <div class="prose"><ul>
-    <li><b>뜻:</b> 여러 연산을 커널 하나로 합칩니다. 2회차 2.8에서 본 기술로, torch.compile, Triton, FlashAttention이 대표 예입니다.</li>
+    <li><b>뜻:</b> 여러 연산을 커널 하나로 합칩니다. 2회차 2.8에서 본 <button class="t" data-t="fusion">커널 퓨전</button>으로, torch.compile, Triton, FlashAttention이 대표 예입니다.</li>
     <li><b>해결하는 단점:</b> 실행 횟수와 VRAM 왕복을 함께 줄입니다.</li>
   </ul></div>
-  <h3>2. <button class="t" data-t="cudagraphs">CUDA Graphs</button></h3>
+  <figure class="fig"><pre class="mermaid">flowchart TB
+  subgraph Before["합치기 전 · 커널 2번"]
+    direction LR
+    A["커널 A&lt;br&gt;2 곱하기"] -->|"중간 결과 쓰기"| V1["VRAM"]
+    V1 -->|"다시 읽기"| B["커널 B&lt;br&gt;1 더하기"]
+  end
+  subgraph After["합친 뒤 · 커널 1번"]
+    direction LR
+    F["합친 커널&lt;br&gt;2 곱하고 바로 1 더하기"] -->|"최종 결과만 쓰기"| V2["VRAM"]
+  end
+  Before ~~~ After</pre></figure>
+  <h3>2. CUDA Graphs</h3>
   <div class="prose"><ul>
-    <li><b>뜻:</b> 커널 실행 순서를 한 번 녹화해 두고, 다음부터는 통째로 한 번에 재생합니다.</li>
+    <li><b>뜻:</b> <button class="t" data-t="cudagraphs">CUDA Graphs</button>는 커널 실행 순서를 한 번 기록해 두고, 다음부터는 기록을 통째로 한 번에 실행합니다.</li>
     <li><b>해결하는 단점:</b> 실행 비용을 커널마다 내지 않아도 됩니다.</li>
   </ul></div>
-  <h3>3. <button class="t" data-t="persistent">Persistent Kernel</button></h3>
+  <h3>3. Persistent Kernel</h3>
   <div class="prose"><ul>
-    <li><b>뜻:</b> 커널을 한 번만 띄워 두고, 그 안에서 다음 일을 계속 가져와 처리합니다. 모델 전체를 커널 하나로 돌리는 Megakernel도 여기에 속합니다.</li>
+    <li><b>뜻:</b> <button class="t" data-t="persistent">Persistent Kernel</button>은 커널을 한 번만 띄워 두고, 그 안에서 다음 일을 계속 가져와 처리합니다. 모델 전체를 커널 하나로 돌리는 Megakernel도 여기에 속합니다.</li>
     <li><b>해결하는 단점:</b> 실행 비용과 커널 사이 공백을 거의 없앱니다. 4.8에서 다시 봅니다.</li>
   </ul></div>
   <h3>4. 타일 단위 작성 도구</h3>
   <div class="prose"><ul>
-    <li><b>뜻:</b> <button class="t" data-t="triton">Triton</button>, cuTile Python처럼 스레드 대신 데이터 조각, 즉 타일 단위로 커널을 씁니다.</li>
+    <li><b>뜻:</b> <button class="t" data-t="triton">Triton</button>, cuTile Python처럼 스레드 대신 타일 단위로 커널을 씁니다. 타일은 데이터를 바둑판처럼 나눈 조각입니다.</li>
     <li><b>해결하는 단점:</b> 커널을 짜고 디버깅하는 부담을 줄입니다.</li>
   </ul></div>
 </section>
 
 <section class="ch" id="s1-9">
   <div class="ch-head"><span class="ch-num">1.9</span><h2>대안과의 비교</h2></div>
-  <div class="tbl"><table>
+  <p class="prose">커널을 어떻게 나누고 띄우느냐에 따라 실행 횟수와 메모리 왕복이 달라집니다.</p>
+  <div class="tbl wide"><table>
     <thead><tr><th>방식</th><th>실행 횟수</th><th>VRAM 왕복</th><th>구현 난이도</th><th>대표 사례</th></tr></thead>
     <tbody>
-      <tr><td>연산마다 커널</td><td>많음</td><td>많음</td><td>쉬움</td><td>PyTorch eager 모드</td></tr>
+      <tr><td>연산마다 커널</td><td>많음</td><td>많음</td><td>쉬움</td><td>PyTorch 기본 실행 (eager 모드)</td></tr>
       <tr><td>커널 퓨전</td><td>적음</td><td>적음</td><td>중간 (컴파일러가 자동화)</td><td>torch.compile, FlashAttention</td></tr>
       <tr><td>CUDA Graphs</td><td>재생 1회</td><td>변화 없음</td><td>쉬움</td><td>vLLM 토큰 생성 단계</td></tr>
       <tr><td>Megakernel</td><td>1회</td><td>최소</td><td>매우 어려움</td><td>저지연 LLM 추론 연구</td></tr>
@@ -203,10 +273,10 @@ cudaDeviceSynchronize();                         // GPU 작업이 끝날 때까�
   <div class="ch-head"><span class="ch-num">1.10</span><h2>최신 트렌드</h2></div>
   <h3>1. 커널을 타일 단위로 씁니다: CUDA Tile</h3>
   <div class="prose"><ul>
-    <li>2025년 12월 CUDA 13.1에서 <button class="t" data-t="cudatile">CUDA Tile</button>이 나왔습니다. 스레드가 아니라 데이터 조각, 즉 타일 단위로 커널을 쓰는 NVIDIA 공식 방식입니다.</li>
+    <li>2025년 12월 CUDA 13.1에서 <button class="t" data-t="cudatile">CUDA Tile</button>이 나왔습니다. 스레드가 아니라 타일 단위로 커널을 쓰는 NVIDIA 공식 방식입니다.</li>
     <li>Python용 cuTile Python이 먼저 나왔고, 2026년 CUDA 13.3에서 C++로도 쓸 수 있게 됐습니다.</li>
     <li>처음에는 Blackwell만 지원했지만, 2026년에 Ampere, Ada, Hopper까지 넓어졌습니다.</li>
-    <li>Tensor Core와 TMA를 쓰는 일은 컴파일러가 맡습니다.</li>
+    <li>Tensor Core처럼 다루기 어려운 장치를 쓰는 일은 컴파일러가 맡습니다.</li>
   </ul></div>
   <h3>2. 모델 전체를 커널 하나로: Megakernel</h3>
   <div class="prose"><ul>
@@ -215,9 +285,7 @@ cudaDeviceSynchronize();                         // GPU 작업이 끝날 때까�
     <li>효과는 한 번에 들어오는 요청이 적은 토큰 생성 단계에서 가장 큽니다.</li>
   </ul></div>
   <h3>3. AI가 커널을 씁니다</h3>
-  <div class="prose"><ul>
-    <li>LLM으로 CUDA와 Triton 커널을 자동 생성하고 최적화하는 시도가 늘고 있습니다. KernelBench 같은 평가 세트가 있습니다.</li>
-  </ul></div>
+  <p class="prose">LLM으로 CUDA와 Triton 커널을 자동으로 만들고 다듬는 시도가 늘고 있습니다. KernelBench 같은 평가 세트가 있습니다.</p>
   <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>커널을 누가, 얼마나 큰 단위로 쓰느냐가 바뀌고 있습니다.</b> 사람이 스레드 단위로 쓰던 커널을, 컴파일러와 AI가 더 큰 단위로 쓰는 쪽으로 옮겨 갑니다.</div>
 </section>
 
@@ -232,9 +300,9 @@ cudaDeviceSynchronize();                         // GPU 작업이 끝날 때까�
   <div class="ch-head"><span class="ch-num">2.1</span><h2>정의</h2></div>
   <p class="lead"><button class="t" data-t="thread">스레드</button>는 <b>커널 코드를 실행하는 가장 작은 단위</b>입니다.</p>
   <div class="prose"><ul>
-    <li>스레드마다 자기 번호, 즉 인덱스와 전용 레지스터를 가집니다.</li>
-    <li>보통 데이터 원소 하나에 스레드 하나를 맞춥니다.</li>
-    <li>스레드는 자기 번호를 보고 몇 번째 데이터를 처리할지 스스로 계산합니다.</li>
+    <li>보통 데이터 하나에 스레드 하나를 맞춥니다. 오늘 예시에서는 스레드 하나가 숫자 하나에 2를 곱합니다.</li>
+    <li>스레드마다 자기 번호와, 자기만 쓰는 저장 공간인 레지스터를 가집니다.</li>
+    <li>스레드는 자기 번호를 보고 몇 번째 숫자를 맡을지 스스로 계산합니다.</li>
   </ul></div>
   <details>
     <summary>Q. 스레드 수와 CUDA Core 수는 같은가요?</summary>
@@ -245,9 +313,9 @@ cudaDeviceSynchronize();                         // GPU 작업이 끝날 때까�
 <section class="ch" id="s2-2">
   <div class="ch-head"><span class="ch-num">2.2</span><h2>등장 배경</h2></div>
   <div class="prose"><ul>
-    <li>원소마다 같은 계산을 하는 일은, 원소마다 실행 주체를 하나씩 두면 가장 쉽게 표현됩니다.</li>
-    <li>그런데 CPU 스레드는 운영체제가 관리해서, 만들고 바꾸는 데 마이크로초 단위 시간이 걸립니다.</li>
-    <li>수만 개를 만들면 관리 비용이 계산보다 커집니다.</li>
+    <li>숫자마다 같은 계산을 하는 일은, 숫자마다 실행 흐름을 하나씩 두면 가장 쉽게 표현됩니다.</li>
+    <li>CPU에도 스레드가 있습니다. 그런데 CPU 스레드는 운영체제가 관리해서, 만들고 바꾸는 데 마이크로초 단위 시간이 걸립니다.</li>
+    <li>수만 개를 만들면 관리하는 시간이 계산하는 시간보다 커집니다.</li>
   </ul></div>
   <div class="callout idea">
     <span class="say">"그럼 하드웨어가 직접 관리하는 아주 가벼운 스레드를 수십만 개 두자!"</span>
@@ -261,12 +329,13 @@ cudaDeviceSynchronize();                         // GPU 작업이 끝날 때까�
 
 <section class="ch" id="s2-3">
   <div class="ch-head"><span class="ch-num">2.3</span><h2>구조</h2></div>
+  <p class="prose">스레드 하나는 자기 번호와 자기 저장 공간을 가집니다.</p>
   <div class="tbl"><table>
     <thead><tr><th>구성</th><th>하는 일</th><th>한계 (H100)</th></tr></thead>
     <tbody>
       <tr><td><code>threadIdx</code></td><td>블록 안에서 내 위치 (x, y, z)</td><td>블록당 최대 1,024</td></tr>
       <tr><td><button class="t" data-t="register">레지스터</button></td><td>스레드 전용, 가장 빠른 저장 공간</td><td>스레드당 최대 255개</td></tr>
-      <tr><td>로컬 메모리</td><td>레지스터가 모자랄 때 넘치는 공간</td><td>실제 위치는 VRAM</td></tr>
+      <tr><td><button class="t" data-t="localmem">로컬 메모리</button></td><td>레지스터가 모자랄 때 넘치는 공간</td><td>실제 위치는 VRAM</td></tr>
       <tr><td>프로그램 카운터</td><td>다음에 실행할 명령의 위치</td><td>Volta부터 스레드마다 따로</td></tr>
     </tbody>
   </table></div>
@@ -280,13 +349,25 @@ cudaDeviceSynchronize();                         // GPU 작업이 끝날 때까�
 <section class="ch" id="s2-4">
   <div class="ch-head"><span class="ch-num">2.4</span><h2>작동 방식</h2></div>
   <h3>1. 내 번호 계산하기</h3>
+  <p class="prose">숫자 100만 개를 256개씩 끊으면, 블록마다 맡는 구간이 이렇게 정해집니다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>블록 번호</th><th>맡는 숫자</th></tr></thead>
+    <tbody>
+      <tr><td class="num">0</td><td>0번 ~ 255번</td></tr>
+      <tr><td class="num">1</td><td>256번 ~ 511번</td></tr>
+      <tr><td class="num">2</td><td>512번 ~ 767번</td></tr>
+      <tr><td class="num">…</td><td>…</td></tr>
+      <tr><td class="num">3,906 (마지막)</td><td>999,936번 ~ 1,000,191번 (999,999번까지만 실제 데이터)</td></tr>
+    </tbody>
+  </table></div>
+  <p class="prose">스레드는 세 값을 보고 자기 숫자를 찾습니다.</p>
   <pre><code>int i = blockIdx.x * blockDim.x + threadIdx.x;  // 전체에서 몇 번째 스레드인지
 if (i &lt; n) out[i] = in[i] * 2;                   // 범위를 벗어나면 아무것도 안 함</code></pre>
   <div class="prose"><ol>
     <li><b>블록 번호:</b> <code>blockIdx.x</code>는 내가 몇 번째 블록인지입니다.</li>
-    <li><b>블록 크기:</b> <code>blockDim.x</code>는 블록 하나에 스레드가 몇 개인지입니다.</li>
+    <li><b>블록 크기:</b> <code>blockDim.x</code>는 블록 하나에 스레드가 몇 개인지입니다. 예시에서는 256입니다.</li>
     <li><b>블록 안 번호:</b> <code>threadIdx.x</code>는 블록 안에서 몇 번째인지입니다.</li>
-    <li><b>전체 번호:</b> 블록 번호 곱하기 블록 크기, 더하기 블록 안 번호입니다. 블록 크기가 256이고 블록 번호가 2, 블록 안 번호가 5라면, 2 곱하기 256 더하기 5, 517번 원소를 맡습니다.</li>
+    <li><b>전체 번호:</b> 블록 번호 곱하기 블록 크기, 더하기 블록 안 번호입니다. 2번 블록의 5번 스레드라면, 2 곱하기 256 더하기 5, 517번 숫자를 맡습니다.</li>
   </ol></div>
   <figure class="fig">
     <div class="fig-title">스레드 번호 계산기</div>
@@ -298,19 +379,20 @@ if (i &lt; n) out[i] = in[i] * 2;                   // 범위를 벗어나면 �
       <div class="panel" id="iPanel" aria-live="polite"></div>
     </div>
     <div class="legend"><span><i class="sw" style="background:var(--idle)"></i>블록</span><span><i class="sw" style="background:var(--accent)"></i>선택한 스레드가 맡는 원소</span></div>
-    <figcaption>가로 막대 하나가 블록 하나입니다. 블록 4개까지만 그렸습니다.</figcaption>
+    <figcaption>가로 막대 하나가 블록 하나입니다. 블록 4개까지만 그렸습니다. 처음 값은 위 예시와 같은 2번 블록의 5번 스레드입니다.</figcaption>
   </figure>
   <h3>2. 범위 확인</h3>
   <div class="prose"><ul>
     <li>스레드는 블록 크기 단위로 만들어집니다. 데이터 수가 나눠떨어지지 않으면 마지막 블록에 남는 스레드가 생깁니다.</li>
+    <li>오늘 예시에서는 마지막 블록의 스레드 192개가 남습니다.</li>
     <li>그래서 <code>if (i &lt; n)</code>으로, 범위를 벗어난 스레드가 메모리를 건드리지 않게 막습니다.</li>
   </ul></div>
   <details>
-    <summary>Q. 데이터가 1,000개이고 블록 크기가 256이면, 남는 스레드는 몇 개인가요?</summary>
-    <div class="prose"><p>블록 4개, 스레드 1,024개가 만들어집니다. 1,000개를 빼면 24개가 남습니다. 이 24개가 범위 확인에 걸려 아무것도 하지 않습니다.</p></div>
+    <summary>Q. 남는 스레드 192개는 어떻게 나왔나요?</summary>
+    <div class="prose"><p>블록 3,907개 곱하기 256은 스레드 1,000,192개입니다. 숫자는 100만 개라서 192개가 남습니다. 이 192개가 범위 확인에 걸려 아무것도 하지 않습니다.</p></div>
   </details>
   <h3>3. 데이터가 스레드보다 많을 때</h3>
-  <p class="prose">스레드 하나가 여러 원소를 차례로 맡습니다. 이걸 grid-stride loop라고 합니다. 4.8에서 봅니다.</p>
+  <p class="prose">스레드 하나가 여러 숫자를 차례로 맡습니다. 이걸 grid-stride loop라고 합니다. 4.8에서 봅니다.</p>
 </section>
 
 <section class="ch" id="s2-5">
@@ -318,7 +400,7 @@ if (i &lt; n) out[i] = in[i] * 2;                   // 범위를 벗어나면 �
   <div class="prose"><ul>
     <li><b>매우 가볍습니다:</b> 레지스터가 미리 나눠져 있어서 만들고 바꾸는 비용이 거의 없습니다.</li>
     <li><b>아주 많이 올라갑니다:</b> H100 SXM은 SM 132개에 2,048개씩, 약 27만 개가 동시에 올라갑니다.</li>
-    <li><b>코드가 단순합니다:</b> 원소 하나에 대한 처리만 적으면 됩니다.</li>
+    <li><b>코드가 단순합니다:</b> 숫자 하나에 대한 처리만 적으면 됩니다.</li>
   </ul></div>
 </section>
 
@@ -326,51 +408,61 @@ if (i &lt; n) out[i] = in[i] * 2;                   // 범위를 벗어나면 �
   <div class="ch-head"><span class="ch-num">2.6</span><h2>부재 시 문제</h2></div>
   <p class="prose">개별 스레드라는 단위가 없다고 가정해 보면, 이런 문제가 생깁니다.</p>
   <div class="prose"><ul>
-    <li>병렬 작업을 벡터 명령, 즉 SIMD로 직접 다뤄야 합니다. CPU의 AVX 코드를 손으로 쓰는 것과 비슷해서 난이도가 크게 오릅니다.</li>
-    <li>원소마다 다른 길을 가는 코드, 예를 들어 if문을 표현하기 어렵습니다.</li>
+    <li>숫자 여러 개를 한 명령으로 처리하는 벡터 명령, 즉 SIMD를 직접 다뤄야 합니다. CPU의 AVX 코드를 손으로 쓰는 것과 비슷해서 난이도가 크게 오릅니다.</li>
+    <li>숫자마다 다른 길을 가는 코드, 예를 들어 if문을 표현하기 어렵습니다.</li>
   </ul></div>
 </section>
 
 <section class="ch" id="s2-7">
   <div class="ch-head"><span class="ch-num">2.7</span><h2>단점</h2></div>
   <div class="prose"><ul>
-    <li><b>하나하나는 느립니다:</b> CPU 코어보다 클럭이 낮고, 분기 예측 같은 장치가 없습니다. 많이 써야 빠릅니다.</li>
+    <li><b>하나하나는 느립니다:</b> CPU 코어보다 클럭이 낮고, 다음 명령을 미리 짐작하는 분기 예측 같은 장치가 없습니다. 많이 써야 빠릅니다.</li>
     <li><b>혼자 움직이지 않습니다:</b> 항상 32개, 즉 warp 단위로 함께 실행됩니다. PART 5에서 봅니다.</li>
     <li><b>레지스터를 많이 쓰면 덜 올라갑니다:</b> 2회차 4.4에서 본 점유율 계산이 바로 이 부분입니다.</li>
     <li><b>같은 곳에 쓰면 충돌합니다:</b> 여러 스레드가 같은 메모리 위치에 동시에 쓰면 결과가 꼬입니다. 이걸 <button class="t" data-t="race">경쟁 상태</button>, 영어로 race condition이라고 합니다.</li>
   </ul></div>
   <details>
     <summary>Q. 경쟁 상태는 실제로 어떻게 생기나요?</summary>
-    <div class="prose"><p>스레드 100개가 합계 변수 하나에 1씩 더한다고 해 보겠습니다. 더하기는 "읽고, 더하고, 쓰기" 세 단계입니다. 두 스레드가 같은 값을 동시에 읽고 각자 1을 더해 쓰면, 2가 늘어야 할 것이 1만 늡니다. 그래서 결과가 100보다 작게 나올 수 있고, 실행할 때마다 값이 달라집니다.</p></div>
+    <div class="prose"><p>스레드 여러 개가 합계 변수 하나에 1씩 더한다고 해 보겠습니다. 더하기는 "읽고, 더하고, 쓰기" 세 단계입니다. 두 스레드가 같은 값을 동시에 읽고 각자 1을 더해 쓰면, 2가 늘어야 할 것이 1만 늡니다. 그래서 결과가 기대보다 작게 나오고, 실행할 때마다 값이 달라집니다.</p></div>
+    <pre class="mermaid">sequenceDiagram
+  participant A as 스레드 A
+  participant M as 합계 변수 (지금 10)
+  participant B as 스레드 B
+  A->>M: 읽기, 10
+  B->>M: 읽기, 10
+  A->>M: 10 + 1 = 11 쓰기
+  B->>M: 10 + 1 = 11 쓰기
+  Note over M: 12가 되어야 하는데 11</pre>
   </details>
 </section>
 
 <section class="ch" id="s2-8">
   <div class="ch-head"><span class="ch-num">2.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
-  <h3>1. <button class="t" data-t="atomic">Atomic 연산</button></h3>
+  <h3>1. Atomic 연산</h3>
   <div class="prose"><ul>
-    <li><b>뜻:</b> 읽고 더하고 쓰는 과정을 다른 스레드가 끼어들 수 없게 한 번에 처리하는 명령입니다. <code>atomicAdd</code>가 대표입니다.</li>
+    <li><b>뜻:</b> <button class="t" data-t="atomic">Atomic 연산</button>은 읽고 더하고 쓰는 세 단계를, 다른 스레드가 끼어들 수 없게 한 번에 처리하는 명령입니다. <code>atomicAdd</code>가 대표입니다. atomic은 "더 쪼갤 수 없는"이라는 뜻입니다.</li>
     <li><b>해결하는 단점:</b> 경쟁 상태를 막습니다.</li>
   </ul></div>
   <h3>2. warp 단위 합계</h3>
   <div class="prose"><ul>
-    <li><b>뜻:</b> 같은 warp 안에서 레지스터 값을 직접 주고받아 먼저 합칩니다. 5.4에서 봅니다.</li>
+    <li><b>뜻:</b> 같은 warp 안의 스레드 32개가 먼저 자기들끼리 값을 합칩니다. 그다음 합계 하나만 atomic 연산으로 더합니다. 5.4에서 봅니다.</li>
     <li><b>해결하는 단점:</b> atomic 연산 횟수를 32분의 1로 줄여서, 충돌로 기다리는 시간을 줄입니다.</li>
   </ul></div>
-  <h3>3. <button class="t" data-t="ilp">ILP</button></h3>
+  <h3>3. ILP</h3>
   <div class="prose"><ul>
-    <li><b>뜻:</b> 2회차 4.8에서 본 기법입니다. 스레드 하나가 서로 상관없는 계산 여러 개를 이어서 처리합니다.</li>
+    <li><b>뜻:</b> <button class="t" data-t="ilp">ILP</button>, 우리말로 명령 수준 병렬성입니다. 2회차 4.8에서 본 기법으로, 스레드 하나가 서로 상관없는 계산 여러 개를 이어서 처리합니다.</li>
     <li><b>해결하는 단점:</b> 레지스터를 많이 써서 스레드가 적게 올라가도 기다림을 숨깁니다.</li>
   </ul></div>
   <h3>4. 타일 단위 도구</h3>
   <div class="prose"><ul>
-    <li><b>뜻:</b> Triton, cuTile Python처럼 개별 스레드를 감추고 데이터 조각 단위로 씁니다.</li>
+    <li><b>뜻:</b> Triton, cuTile Python처럼 개별 스레드를 감추고 타일 단위로 씁니다.</li>
     <li><b>해결하는 단점:</b> 번호 계산과 범위 확인에서 생기는 실수를 줄입니다.</li>
   </ul></div>
 </section>
 
 <section class="ch" id="s2-9">
   <div class="ch-head"><span class="ch-num">2.9</span><h2>대안과의 비교</h2></div>
+  <p class="prose">같은 "스레드"라는 이름이지만, CPU와 GPU는 성격이 크게 다릅니다.</p>
   <div class="tbl"><table>
     <thead><tr><th>구분</th><th>CPU 스레드</th><th>GPU 스레드</th></tr></thead>
     <tbody>
@@ -378,7 +470,7 @@ if (i &lt; n) out[i] = in[i] * 2;                   // 범위를 벗어나면 �
       <tr><td>만들고 바꾸는 비용</td><td>마이크로초 단위</td><td>거의 0</td></tr>
       <tr><td>동시에 올라가는 수</td><td>수십에서 수백</td><td>수십만 (H100 SXM 약 27만)</td></tr>
       <tr><td>하나의 성능</td><td>높음 (복잡한 분기도 잘함)</td><td>낮음 (단순 반복에 적합)</td></tr>
-      <tr><td>실행 방식</td><td>각자 독립</td><td>32개가 같은 명령 (<button class="t" data-t="simt">SIMT</button>)</td></tr>
+      <tr><td>실행 방식</td><td>각자 독립</td><td>32개가 같은 명령 (<button class="t" data-t="simt">SIMT</button>, 5.1에서 봄)</td></tr>
     </tbody>
   </table></div>
   <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>GPU 스레드는 하나의 속도가 아니라, 동시에 몇 개를 굴리느냐로 성능을 냅니다.</b></div>
@@ -393,15 +485,15 @@ if (i &lt; n) out[i] = in[i] * 2;                   // 범위를 벗어나면 �
   </ul></div>
   <h3>2. Python으로 쓰는 고성능 커널: CuTe DSL</h3>
   <div class="prose"><ul>
-    <li>CuTe DSL은 NVIDIA의 행렬 곱셈 라이브러리 CUTLASS를 Python으로 쓰게 한 도구입니다.</li>
-    <li>FlashAttention-4가 이걸로 쓰였고, C++ 템플릿 방식보다 컴파일이 20에서 30배 빠르다고 보고했습니다.</li>
+    <li>CUTLASS는 NVIDIA가 만든 행렬 곱셈 코드 모음입니다. CuTe DSL은 이걸 Python으로 쓰게 한 도구입니다.</li>
+    <li>FlashAttention-4가 이걸로 쓰였고, 기존 C++ 방식보다 컴파일이 20에서 30배 빠르다고 보고했습니다.</li>
   </ul></div>
   <h3>3. 최고 성능 커널은 여전히 직접 다룹니다</h3>
   <div class="prose"><ul>
     <li>FlashAttention-3, 4 같은 커널은 스레드와 warp 수준까지 직접 제어합니다.</li>
-    <li>데이터센터용 Blackwell에서는 스레드 하나가 Tensor Core 명령을 냅니다. 스레드 하나의 역할이 커진 셈입니다. PART 5에서 봅니다.</li>
+    <li>데이터센터용 Blackwell에서는 스레드 하나가 Tensor Core에 행렬 곱셈 명령을 냅니다. 스레드 하나의 역할이 커진 셈입니다. PART 5에서 봅니다.</li>
   </ul></div>
-  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>생산성은 스레드를 감추는 타일 모델로, 마지막 성능은 스레드를 직접 다루는 코드로 얻는 구도입니다.</b></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>생산성은 스레드를 감추는 타일 방식으로, 마지막 성능은 스레드를 직접 다루는 코드로 얻는 구도입니다.</b></div>
 </section>
 
 <!-- ============ PART 3 : Block ============ -->
@@ -415,17 +507,18 @@ if (i &lt; n) out[i] = in[i] * 2;                   // 범위를 벗어나면 �
   <div class="ch-head"><span class="ch-num">3.1</span><h2>정의</h2></div>
   <p class="lead"><button class="t" data-t="block">블록</button>은 <b>같은 SM에서 함께 실행되는 스레드 묶음</b>입니다.</p>
   <div class="prose"><ul>
-    <li>스레드를 최대 1,024개까지 묶습니다. 공식 문서에서는 CTA, 즉 Cooperative Thread Array라고도 부릅니다.</li>
+    <li>스레드를 최대 1,024개까지 묶습니다. 오늘 예시에서는 256개씩 묶어 블록이 3,907개입니다.</li>
     <li>같은 블록의 스레드끼리만 Shared Memory를 함께 쓰고, 서로 기다려 줄 수 있습니다.</li>
-    <li>블록끼리는 서로 독립입니다.</li>
+    <li>블록끼리는 서로 독립입니다. 서로의 존재를 모른다고 생각하면 됩니다.</li>
+    <li>공식 문서에서는 CTA, 즉 Cooperative Thread Array라고도 부릅니다.</li>
   </ul></div>
 </section>
 
 <section class="ch" id="s3-2">
   <div class="ch-head"><span class="ch-num">3.2</span><h2>등장 배경</h2></div>
   <div class="prose"><ul>
-    <li>스레드끼리 협력해야 하는 일이 많습니다. 데이터를 함께 불러와 여러 번 재사용하면 VRAM을 덜 읽기 때문입니다.</li>
-    <li>그런데 모든 스레드가 서로 협력하게 하면, 수십만 개를 한꺼번에 맞춰야 합니다. 그러면 GPU 크기에 맞춰 늘릴 수 없습니다.</li>
+    <li>스레드끼리 협력해야 하는 일이 많습니다. 데이터를 함께 불러와 여러 번 다시 쓰면, 느린 VRAM을 덜 읽기 때문입니다.</li>
+    <li>그런데 모든 스레드가 서로 협력하게 하면, 수십만 개를 한꺼번에 맞춰야 합니다. 그러면 SM 수가 다른 GPU마다 코드를 맞춰야 합니다.</li>
   </ul></div>
   <div class="callout idea">
     <span class="say">"그럼 가까운 스레드끼리만 묶어서 협력하게 하고, 묶음끼리는 서로 모르게 하자!"</span>
@@ -439,6 +532,7 @@ if (i &lt; n) out[i] = in[i] * 2;                   // 범위를 벗어나면 �
 
 <section class="ch" id="s3-3">
   <div class="ch-head"><span class="ch-num">3.3</span><h2>구조</h2></div>
+  <p class="prose">블록 하나는 자기 번호, 크기, 함께 쓰는 공간, 함께 기다리는 장치를 가집니다.</p>
   <div class="tbl"><table>
     <thead><tr><th>구성</th><th>하는 일</th><th>한계 (H100)</th></tr></thead>
     <tbody>
@@ -448,7 +542,16 @@ if (i &lt; n) out[i] = in[i] * 2;                   // 범위를 벗어나면 �
       <tr><td>동기화 배리어</td><td><code>__syncthreads()</code>로 모두 도착할 때까지 대기</td><td>블록 안에서만</td></tr>
     </tbody>
   </table></div>
-  <p class="prose">H100부터는 블록 여러 개를 다시 묶은 Thread Block Cluster도 있습니다. 3.8에서 봅니다.</p>
+  <figure class="fig">
+    <div class="fig-title">SM에 올라간 블록 하나 (스레드 256개)</div>
+    <div class="scroll-x"><svg id="blockSvg" viewBox="0 0 640 260" width="100%" style="min-width:560px" role="img" aria-label="SM 안에 블록 하나가 있고, 블록은 스레드 256개로 이루어집니다. 스레드마다 레지스터가 있고, 블록 전체가 Shared Memory를 함께 씁니다"></svg></div>
+    <div class="legend"><span><i class="sw" style="background:var(--accent)"></i>스레드 (자기 레지스터를 가짐)</span><span><i class="sw" style="background:var(--mem)"></i>Shared Memory (블록이 함께 씀)</span></div>
+    <figcaption>작은 칸 하나가 스레드 하나입니다. 한 줄 32칸이 warp 하나라서, 256개는 8줄이 됩니다.</figcaption>
+  </figure>
+  <div class="prose"><ul>
+    <li>레지스터는 스레드마다 따로, Shared Memory는 블록이 함께 씁니다.</li>
+    <li>H100부터는 블록 여러 개를 다시 묶은 Thread Block Cluster도 있습니다. 3.8에서 봅니다.</li>
+  </ul></div>
   <details>
     <summary>Q. 왜 Shared Memory는 기본 48KB이고, 따로 설정해야 227KB까지 쓰나요?</summary>
     <div class="prose"><p>예전 GPU와 맞추려고 기본 한도를 48KB로 두었습니다. 그보다 많이 쓰려면 커널마다 <code>cudaFuncSetAttribute</code>로 직접 허락해야 합니다. SM 전체의 228KB 중 1KB는 시스템이 쓰기 때문에, 블록 하나는 최대 227KB입니다.</p></div>
@@ -463,20 +566,24 @@ if (i &lt; n) out[i] = in[i] * 2;                   // 범위를 벗어나면 �
     <li><b>warp로 나누기:</b> 블록은 SM 안에서 32개씩 warp로 나뉩니다. 스레드 256개짜리 블록은 warp 8개입니다.</li>
     <li><b>협력:</b> 블록 안의 스레드는 Shared Memory로 데이터를 나누고, <code>__syncthreads()</code>로 서로 기다립니다.</li>
     <li><b>끝:</b> 블록이 끝나면 그 자리에 다음 블록이 들어옵니다. 블록끼리의 실행 순서는 정해져 있지 않습니다.</li>
-  </ol>
-  <p>2회차 1.4에서 본 실행 순서가 바로 이것입니다.</p></div>
+  </ol></div>
+  <p class="prose">2회차 1.4에서 본 실행 순서가 바로 이것입니다.</p>
   <h3>2. 협력하는 코드</h3>
   <pre><code>__shared__ float tile[256];          // 블록이 함께 쓰는 공간
 tile[threadIdx.x] = in[i];           // 각자 하나씩 불러오고
 __syncthreads();                     // 모두 불러올 때까지 기다린 뒤
 float v = tile[255 - threadIdx.x];   // 다른 스레드가 불러온 값을 씀</code></pre>
-  <div class="prose"><ul>
-    <li>각자 하나씩 VRAM에서 불러와 Shared Memory에 둡니다.</li>
-    <li>모두 불러올 때까지 기다립니다.</li>
-    <li>그다음 다른 스레드가 불러온 값을 VRAM을 다시 읽지 않고 씁니다.</li>
-  </ul></div>
+  <div class="prose"><ol>
+    <li><b>불러오기:</b> 스레드마다 VRAM에서 숫자 하나씩 불러와 Shared Memory에 둡니다.</li>
+    <li><b>기다리기:</b> 블록의 모든 스레드가 다 불러올 때까지 기다립니다.</li>
+    <li><b>함께 쓰기:</b> 다른 스레드가 불러온 값을, VRAM을 다시 읽지 않고 씁니다.</li>
+  </ol></div>
+  <figure class="fig"><pre class="mermaid">flowchart LR
+  V["VRAM"] -->|"① 각자 하나씩 불러오기"| S["Shared Memory"]
+  S --> Y["② __syncthreads&lt;br&gt;모두 올 때까지 대기"]
+  Y -->|"③ 다른 스레드가 둔 값 읽기"| T["블록의 스레드들"]</pre></figure>
   <details>
-    <summary>Q. __syncthreads()를 빼면 어떻게 되나요?</summary>
+    <summary>Q. <code>__syncthreads()</code>를 빼면 어떻게 되나요?</summary>
     <div class="prose"><p>다른 스레드가 아직 값을 넣지 않은 칸을 읽을 수 있습니다. 실행할 때마다 결과가 달라지는, 찾기 어려운 버그가 됩니다.</p></div>
   </details>
 </section>
@@ -484,8 +591,8 @@ float v = tile[255 - threadIdx.x];   // 다른 스레드가 불러온 값을 씀
 <section class="ch" id="s3-5">
   <div class="ch-head"><span class="ch-num">3.5</span><h2>이점</h2></div>
   <div class="prose"><ul>
-    <li><b>데이터를 재사용합니다:</b> VRAM 대신 Shared Memory에서 여러 번 읽습니다. 행렬 곱셈에서 블록 하나가 128 곱하기 128 조각을 맡으면, 불러온 값을 수십 번 다시 씁니다.</li>
-    <li><b>저절로 늘어납니다:</b> 블록이 서로 독립이라, SM 24개 GPU든 132개 GPU든 같은 코드가 블록을 나눠 실행합니다.</li>
+    <li><b>데이터를 다시 씁니다:</b> VRAM 대신 Shared Memory에서 여러 번 읽습니다. 행렬 곱셈에서 블록 하나가 128 곱하기 128 조각을 맡으면, 불러온 값을 수십 번 다시 씁니다.</li>
+    <li><b>GPU 크기에 맞춰 저절로 늘어납니다:</b> 블록이 서로 독립이라, SM 24개 GPU든 132개 GPU든 같은 코드가 블록을 나눠 실행합니다.</li>
     <li><b>자원 관리가 쉽습니다:</b> 레지스터와 Shared Memory를 블록 단위로 잡고 풉니다.</li>
   </ul></div>
 </section>
@@ -494,8 +601,8 @@ float v = tile[255 - threadIdx.x];   // 다른 스레드가 불러온 값을 씀
   <div class="ch-head"><span class="ch-num">3.6</span><h2>부재 시 문제</h2></div>
   <p class="prose">블록이라는 단위가 없다고 가정해 보면, 이런 문제가 생깁니다.</p>
   <div class="prose"><ul>
-    <li>스레드끼리 데이터를 나눌 방법이 VRAM뿐이라, 메모리 대역폭이 병목이 됩니다.</li>
-    <li>반대로 모든 스레드가 서로 기다릴 수 있게 하면, GPU 크기에 맞춰 늘릴 수 없습니다.</li>
+    <li>스레드끼리 데이터를 나눌 방법이 VRAM뿐이라, 메모리를 오가는 시간이 병목이 됩니다.</li>
+    <li>반대로 모든 스레드가 서로 기다릴 수 있게 하면, SM 수가 다른 GPU마다 같은 코드를 그대로 쓸 수 없습니다.</li>
   </ul></div>
 </section>
 
@@ -508,21 +615,24 @@ float v = tile[255 - threadIdx.x];   // 다른 스레드가 불러온 값을 씀
   </ul></div>
   <details>
     <summary>Q. 블록끼리는 왜 기다리지 못하게 했나요?</summary>
-    <div class="prose"><p>블록 A가 블록 B를 기다리는데, B가 아직 SM에 올라오지 못했다고 해 보겠습니다. A는 SM 자리를 차지한 채 영원히 기다리고, B는 자리가 나지 않아 올라오지 못합니다. 이걸 교착 상태라고 합니다. SM이 적은 GPU일수록 잘 생기니, 블록을 독립으로 두어야 어떤 GPU에서든 같은 코드가 돕니다.</p></div>
+    <div class="prose"><p>블록 A가 블록 B를 기다리는데, B가 아직 SM에 올라오지 못했다고 해 보겠습니다. A는 SM 자리를 차지한 채 계속 기다리고, B는 자리가 나지 않아 올라오지 못합니다. 이걸 <button class="t" data-t="deadlock">교착 상태</button>라고 합니다. SM이 적은 GPU일수록 잘 생기니, 블록을 독립으로 두어야 어떤 GPU에서든 같은 코드가 돕니다.</p></div>
+    <pre class="mermaid">flowchart LR
+  A["블록 A&lt;br&gt;SM 자리를 차지한 채&lt;br&gt;B를 기다림"] -->|"B가 끝나길 기다림"| B["블록 B&lt;br&gt;자리가 없어&lt;br&gt;SM에 못 올라옴"]
+  B -->|"A가 자리를 비우길 기다림"| A</pre>
   </details>
 </section>
 
 <section class="ch" id="s3-8">
   <div class="ch-head"><span class="ch-num">3.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
-  <h3>1. <button class="t" data-t="cluster">Thread Block Cluster</button> (H100부터)</h3>
+  <h3>1. Thread Block Cluster (H100부터)</h3>
   <div class="prose"><ul>
-    <li><b>뜻:</b> 2회차 1.8에서 본 기능입니다. 블록을 보통 최대 8개까지 묶어, 서로의 Shared Memory를 직접 읽게 합니다. 이 공간을 Distributed Shared Memory라고 부릅니다.</li>
+    <li><b>뜻:</b> 2회차 1.8에서 본 <button class="t" data-t="cluster">Thread Block Cluster</button>입니다. 블록을 보통 최대 8개까지 묶어, 서로의 Shared Memory를 직접 읽게 합니다. 이렇게 여러 블록에 나뉜 Shared Memory를 하나처럼 쓰는 공간을 Distributed Shared Memory라고 부릅니다.</li>
     <li><b>해결하는 단점:</b> 블록끼리 데이터를 나눌 때 VRAM까지 가지 않아도 됩니다.</li>
   </ul></div>
-  <h3>2. <button class="t" data-t="coopgroups">Cooperative Groups</button></h3>
+  <h3>2. Cooperative Groups</h3>
   <div class="prose"><ul>
-    <li><b>뜻:</b> 스레드를 원하는 크기로 묶어 함께 기다리게 하는 기능입니다. 그리드 전체를 한 번에 기다리게 하는 <code>grid.sync()</code>도 있습니다.</li>
-    <li><b>해결하는 단점:</b> 블록끼리 맞춰야 할 때 커널을 나누지 않아도 됩니다. 단, 모든 블록이 동시에 SM에 올라갈 수 있을 만큼만 띄워야 합니다.</li>
+    <li><b>뜻:</b> <button class="t" data-t="coopgroups">Cooperative Groups</button>는 스레드를 원하는 크기로 묶어 함께 기다리게 하는 기능입니다. 그리드 전체를 한 번에 기다리게 하는 <code>grid.sync()</code>도 있습니다.</li>
+    <li><b>해결하는 단점:</b> 블록끼리 맞춰야 할 때 커널을 나누지 않아도 됩니다. 단, 3.7의 교착 상태를 피하려면 모든 블록이 동시에 SM에 올라갈 수 있을 만큼만 띄워야 합니다.</li>
   </ul></div>
   <h3>3. 블록 크기 추천 함수</h3>
   <div class="prose"><ul>
@@ -539,10 +649,15 @@ float v = tile[255 - threadIdx.x];   // 다른 스레드가 불러온 값을 씀
     <tbody>
       <tr><td>warp (32 스레드)</td><td>레지스터 직접 교환 (shuffle)</td><td><code>__syncwarp</code></td><td>가장 빠름</td></tr>
       <tr><td>블록 (최대 1,024)</td><td>Shared Memory</td><td><code>__syncthreads</code></td><td>빠름</td></tr>
-      <tr><td>Cluster (블록 최대 8개)</td><td>Distributed Shared Memory</td><td>cluster.sync</td><td>중간</td></tr>
-      <tr><td>그리드 전체</td><td>VRAM</td><td>커널 분리, grid.sync</td><td>느림</td></tr>
+      <tr><td>Cluster (블록 최대 8개)</td><td>Distributed Shared Memory</td><td><code>cluster.sync</code></td><td>중간</td></tr>
+      <tr><td>그리드 전체</td><td>VRAM</td><td>커널 분리, <code>grid.sync</code></td><td>느림</td></tr>
     </tbody>
   </table></div>
+  <figure class="fig">
+    <div class="fig-title">협력 범위와 공유 수단</div>
+    <div class="scroll-x"><svg id="scopeSvg" viewBox="0 0 640 240" width="100%" style="min-width:560px" role="img" aria-label="warp는 블록 안에, 블록은 Cluster 안에, Cluster는 그리드 안에 들어갑니다. 바깥으로 갈수록 공유 수단이 멀어지고 느려집니다"></svg></div>
+    <figcaption>안쪽 상자일수록 계산 유닛에 가까운 저장 공간으로 값을 나눠서 빠릅니다. 개수는 그림을 위해 줄였습니다.</figcaption>
+  </figure>
   <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>협력 범위가 넓어질수록 느려집니다.</b> 가능한 한 좁은 범위에서 협력하도록 짜는 것이 기본입니다.</div>
 </section>
 
@@ -550,14 +665,15 @@ float v = tile[255 - threadIdx.x];   // 다른 스레드가 불러온 값을 씀
   <div class="ch-head"><span class="ch-num">3.10</span><h2>최신 트렌드</h2></div>
   <h3>1. Cluster가 본격적으로 쓰입니다</h3>
   <div class="prose"><ul>
-    <li>CUTLASS 3과 4, FlashAttention-3 같은 H100 이후 커널이 Cluster로 같은 데이터를 여러 SM에 한 번에 뿌립니다. 이걸 <button class="t" data-t="tma">TMA</button> multicast라고 합니다.</li>
+    <li>CUTLASS 3과 4, FlashAttention-3 같은 H100 이후 커널이 Cluster를 씁니다.</li>
+    <li>같은 데이터를 VRAM에서 한 번만 읽어, Cluster 안의 여러 SM에 동시에 나눠 줍니다. 이 기능을 <button class="t" data-t="tma">TMA</button> multicast라고 합니다.</li>
     <li>VRAM에서 같은 데이터를 여러 번 읽지 않아도 됩니다.</li>
   </ul></div>
   <h3>2. 두 SM이 행렬 곱셈 하나를 함께 합니다</h3>
   <div class="prose"><ul>
-    <li>데이터센터용 Blackwell은 같은 Cluster 안의 블록 두 개가 짝을 이뤄, 큰 행렬 곱셈 하나를 함께 합니다. 이걸 2-CTA MMA라고 부릅니다.</li>
-    <li>한 번에 맡을 수 있는 조각이 커져서 Shared Memory 왕래가 줄어듭니다.</li>
-    <li>FlashAttention-4는 이 방식으로 역전파 계산의 atomic 연산을 절반으로 줄였습니다.</li>
+    <li>데이터센터용 Blackwell은 같은 Cluster 안의 블록 두 개가 짝을 이뤄, 큰 행렬 곱셈 하나를 함께 합니다. 이걸 2-CTA MMA라고 부릅니다. CTA는 3.1에서 본 블록의 다른 이름입니다.</li>
+    <li>한 번에 맡을 수 있는 조각이 커져서 Shared Memory를 오가는 일이 줄어듭니다.</li>
+    <li>FlashAttention-4는 이 방식으로, 학습의 역전파 계산에서 atomic 연산을 절반으로 줄였습니다.</li>
   </ul></div>
   <h3>3. 블록 단위 프로그래밍이 다시 주목받습니다</h3>
   <div class="prose"><ul>
@@ -578,7 +694,7 @@ float v = tile[255 - threadIdx.x];   // 다른 스레드가 불러온 값을 씀
   <div class="ch-head"><span class="ch-num">4.1</span><h2>정의</h2></div>
   <p class="lead"><button class="t" data-t="grid">그리드</button>는 <b>커널 한 번 실행으로 만들어지는 블록 전체</b>입니다.</p>
   <div class="prose"><ul>
-    <li>커널을 한 번 실행하면 그리드가 하나 만들어집니다.</li>
+    <li>커널을 한 번 실행하면 그리드가 하나 만들어집니다. 오늘 예시의 그리드는 블록 3,907개입니다.</li>
     <li>블록을 1차원에서 3차원까지 배치할 수 있습니다.</li>
     <li>데이터 크기에 맞춰 블록을 몇 개 만들지 정하는 가장 바깥 단위입니다.</li>
   </ul></div>
@@ -587,8 +703,8 @@ float v = tile[255 - threadIdx.x];   // 다른 스레드가 불러온 값을 씀
 <section class="ch" id="s4-2">
   <div class="ch-head"><span class="ch-num">4.2</span><h2>등장 배경</h2></div>
   <div class="prose"><ul>
-    <li>데이터 크기는 GPU와 상관없이 정해집니다. 이미지 한 장은 GPU가 바뀌어도 픽셀 수가 같습니다.</li>
-    <li>문제를 몇 조각으로 나눌지를 SM 수에 맞춰 정하면, GPU가 바뀔 때마다 코드를 고쳐야 합니다.</li>
+    <li>데이터 크기는 GPU와 상관없이 정해집니다. 숫자 100만 개는 GPU가 바뀌어도 100만 개입니다.</li>
+    <li>일을 몇 조각으로 나눌지를 SM 수에 맞춰 정하면, GPU가 바뀔 때마다 코드를 고쳐야 합니다.</li>
   </ul></div>
   <div class="callout idea">
     <span class="say">"그럼 데이터 크기만 보고 조각 수를 정하고, 어느 SM에 줄지는 하드웨어에 맡기자!"</span>
@@ -602,6 +718,13 @@ float v = tile[255 - threadIdx.x];   // 다른 스레드가 불러온 값을 씀
 
 <section class="ch" id="s4-3">
   <div class="ch-head"><span class="ch-num">4.3</span><h2>구조</h2></div>
+  <h3>1. 1차원 그리드</h3>
+  <p class="prose">오늘 예시처럼 숫자가 한 줄로 늘어선 데이터는, 블록도 한 줄로 늘어놓습니다.</p>
+  <figure class="fig">
+    <div class="fig-title">1차원 그리드: 숫자 100만 개, 블록 3,907개</div>
+    <div class="scroll-x"><svg id="g1Svg" viewBox="0 0 640 130" width="100%" style="min-width:560px" role="img" aria-label="숫자 100만 개를 256개씩 끊어 블록 0번부터 3,906번까지 한 줄로 늘어놓은 그림. 마지막 블록은 64칸만 데이터가 있고 192칸이 남습니다"></svg></div>
+    <div class="legend"><span><i class="sw" style="background:var(--accent)"></i>데이터를 맡은 스레드</span><span><i class="sw" style="background:var(--idle)"></i>범위를 벗어나 쉬는 스레드</span></div>
+  </figure>
   <div class="tbl"><table>
     <thead><tr><th>구성</th><th>뜻</th><th>한계 (H100)</th></tr></thead>
     <tbody>
@@ -609,24 +732,30 @@ float v = tile[255 - threadIdx.x];   // 다른 스레드가 불러온 값을 씀
       <tr><td><code>blockIdx</code></td><td>그리드 안에서 블록의 위치</td><td>-</td></tr>
     </tbody>
   </table></div>
-  <p class="prose">이미지나 행렬처럼 2차원 데이터는 2차원 그리드로 짜면 번호 계산이 쉽습니다.</p>
+  <details>
+    <summary>Q. 기초 · 블록 수를 왜 (n + 255) / 256처럼 쓰나요?</summary>
+    <div class="prose"><p>올림 나눗셈입니다. 100만을 256으로 나누면 3,906.25입니다. 몫만 쓰면 블록이 3,906개라서 숫자 64개가 빠집니다. 255를 더한 뒤 나누면 3,907이 나와서 모든 숫자를 덮습니다.</p></div>
+  </details>
+  <h3>2. 2차원 그리드</h3>
+  <p class="prose">이미지나 행렬처럼 가로세로가 있는 데이터는 2차원 그리드로 짜면 번호 계산이 쉽습니다. 1920 곱하기 1080 이미지를 16 곱하기 16 조각으로 나누면, 가로 120개, 세로 68개 블록이 됩니다.</p>
   <pre><code>dim3 block(16, 16);                               // 블록 하나 = 16 x 16 = 256 스레드
 dim3 grid((1920 + 15) / 16, (1080 + 15) / 16);    // 120 x 68 블록
 brighten&lt;&lt;&lt;grid, block&gt;&gt;&gt;(img);</code></pre>
-  <details>
-    <summary>Q. 기초 · 블록 수를 왜 (n + 255) / 256처럼 쓰나요?</summary>
-    <div class="prose"><p>올림 나눗셈입니다. 1,000을 256으로 나누면 몫이 3이지만 블록은 4개가 필요합니다. 255를 더한 뒤 나누면 4가 나옵니다.</p></div>
-  </details>
+  <figure class="fig">
+    <div class="fig-title">2차원 그리드: 이미지 1920 × 1080, 블록 120 × 68개</div>
+    <div class="scroll-x"><svg id="g2Svg" viewBox="0 0 640 260" width="100%" style="min-width:560px" role="img" aria-label="이미지를 가로 120개, 세로 68개 블록으로 나누고, 블록 하나는 16 곱하기 16 픽셀, 스레드 256개입니다"></svg></div>
+    <figcaption>왼쪽은 이미지 전체를 블록으로 나눈 모습이고, 오른쪽은 블록 하나를 확대한 모습입니다. 블록 하나의 칸 하나가 스레드 하나, 픽셀 하나입니다.</figcaption>
+  </figure>
 </section>
 
 <section class="ch" id="s4-4">
   <div class="ch-head"><span class="ch-num">4.4</span><h2>작동 방식</h2></div>
-  <p class="prose">블록들은 SM에 여러 차례에 걸쳐 채워집니다. 2회차 4.8에서 본 <button class="t" data-t="wave">wave</button>가 이 한 차례입니다.</p>
+  <p class="prose">블록 3,907개가 한꺼번에 SM에 올라가지는 않습니다. SM이 한 번에 받을 수 있는 만큼 채우고, 끝나면 다음 블록을 채웁니다. 이 한 차례를 <button class="t" data-t="wave">wave</button>라고 합니다. 2회차 4.8에서 본 wave입니다.</p>
   <div class="prose"><ol>
     <li><b>한 번에 올라가는 블록 수:</b> SM 수 곱하기 SM당 블록 수입니다. H100 SXM에서 256 스레드 블록이 SM마다 8개 올라가면, 132 곱하기 8, 1,056개입니다.</li>
-    <li><b>필요한 블록 수:</b> 원소 100만 개를 256개씩 나누면 블록 3,907개입니다.</li>
+    <li><b>필요한 블록 수:</b> 숫자 100만 개를 256개씩 나누면 블록 3,907개입니다.</li>
     <li><b>wave 수:</b> 3,907 나누기 1,056, 약 3.7 wave입니다.</li>
-    <li><b>마지막 wave:</b> 네 번째 wave는 약 70%만 찹니다. 나머지 SM은 놉니다.</li>
+    <li><b>마지막 wave:</b> 네 번째 wave에는 블록이 739개뿐이라 약 70%만 찹니다. 나머지 SM은 놉니다.</li>
   </ol></div>
   <figure class="fig">
     <div class="fig-title">wave 계산기</div>
@@ -638,8 +767,12 @@ brighten&lt;&lt;&lt;grid, block&gt;&gt;&gt;(img);</code></pre>
       <div class="panel" id="wPanel" aria-live="polite"></div>
     </div>
     <div class="legend"><span><i class="sw" style="background:var(--accent)"></i>일하는 SM</span><span><i class="sw" style="background:var(--idle)"></i>노는 SM</span></div>
-    <figcaption>예시입니다. 레지스터와 Shared Memory 한도는 빼고, SM당 스레드 수와 블록 수 한도만으로 계산했습니다. wave가 많으면 처음 몇 개와 마지막 wave만 그립니다.</figcaption>
+    <figcaption>예시입니다. 처음 값은 위 계산과 같은 H100 SXM, 100만 개, 블록 256입니다. 레지스터와 Shared Memory 한도는 빼고, SM당 스레드 수와 블록 수 한도만으로 계산했습니다. wave가 많으면 처음 몇 개와 마지막 wave만 그립니다.</figcaption>
   </figure>
+  <details>
+    <summary>Q. 기초 · SM마다 블록이 8개 올라간다는 건 어떻게 나왔나요?</summary>
+    <div class="prose"><p>2회차 4.3에서 본 계산입니다. 256 스레드 블록은 warp 8개이고, SM의 warp 자리는 64칸이라 64 나누기 8, 블록 8개입니다. 레지스터와 Shared Memory는 넉넉하다고 가정한 예시입니다.</p></div>
+  </details>
   <details>
     <summary>Q. 그리드를 크게 잡으면 무조건 좋나요?</summary>
     <div class="prose"><p>GPU를 채우려면 충분히 커야 합니다. 하지만 너무 잘게 쪼개면 블록마다 반복되는 준비 작업이 늘어납니다. 그래서 4.8의 grid-stride loop처럼 블록 수를 SM 수의 몇 배로 고정하는 방식도 많이 씁니다.</p></div>
@@ -650,7 +783,7 @@ brighten&lt;&lt;&lt;grid, block&gt;&gt;&gt;(img);</code></pre>
   <div class="ch-head"><span class="ch-num">4.5</span><h2>이점</h2></div>
   <div class="prose"><ul>
     <li><b>데이터 크기만 보면 됩니다:</b> 블록 수만 정하면 하드웨어가 SM에 나눠 줍니다.</li>
-    <li><b>큰 GPU에서 저절로 빨라집니다:</b> 같은 그리드라도 SM이 많으면 wave 수가 줄어듭니다. 위 예시는 SM 24개인 RTX 4060에서 약 27 wave, H100 SXM에서 약 3.7 wave입니다.</li>
+    <li><b>큰 GPU에서 저절로 빨라집니다:</b> 같은 그리드라도 SM이 많으면 wave 수가 줄어듭니다. 오늘 예시는 RTX 4060에서 약 27 wave, H100 SXM에서 약 3.7 wave입니다. RTX 4060은 SM이 24개이고, SM 하나에 이 블록이 6개까지 올라가서 한 번에 144개씩 처리합니다.</li>
   </ul></div>
 </section>
 
@@ -658,7 +791,7 @@ brighten&lt;&lt;&lt;grid, block&gt;&gt;&gt;(img);</code></pre>
   <div class="ch-head"><span class="ch-num">4.6</span><h2>부재 시 문제</h2></div>
   <p class="prose">그리드라는 단위가 없다고 가정해 보면, 이런 문제가 생깁니다.</p>
   <div class="prose"><ul>
-    <li>문제를 SM 수에 맞춰 직접 나눠야 해서, GPU가 바뀔 때마다 코드를 고쳐야 합니다.</li>
+    <li>일을 SM 수에 맞춰 직접 나눠야 해서, GPU가 바뀔 때마다 코드를 고쳐야 합니다.</li>
     <li>데이터 크기와 하드웨어 크기가 한 코드에 섞여 관리하기 어렵습니다.</li>
   </ul></div>
 </section>
@@ -666,17 +799,18 @@ brighten&lt;&lt;&lt;grid, block&gt;&gt;&gt;(img);</code></pre>
 <section class="ch" id="s4-7">
   <div class="ch-head"><span class="ch-num">4.7</span><h2>단점</h2></div>
   <div class="prose"><ul>
-    <li><b>마지막 wave가 비면 손해입니다:</b> 이걸 wave quantization, 우리말로 꼬리 효과라고 합니다. 1.05 wave면 거의 2 wave만큼 시간이 걸립니다.</li>
+    <li><b>마지막 wave가 비면 손해입니다:</b> 이걸 wave quantization, 우리말로 <button class="t" data-t="tail">꼬리 효과</button>라고 합니다. 1.05 wave면 거의 2 wave만큼 시간이 걸립니다. 2회차 4.8의 "SM 132개에 블록 133개" 그림과 같은 이야기입니다.</li>
     <li><b>블록이 적으면 GPU 일부만 씁니다:</b> 블록이 64개뿐이면 SM 132개 중 68개는 일을 받지 못합니다.</li>
-    <li><b>그리드 전체가 서로 기다릴 수 없습니다:</b> 기본적으로는 커널을 나눠야 합니다.</li>
+    <li><b>그리드 전체가 서로 기다릴 수 없습니다:</b> 3.7에서 본 이유로, 기본적으로는 커널을 나눠야 합니다.</li>
   </ul></div>
 </section>
 
 <section class="ch" id="s4-8">
   <div class="ch-head"><span class="ch-num">4.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
-  <h3>1. <button class="t" data-t="gridstride">Grid-stride loop</button></h3>
+  <h3>1. Grid-stride loop</h3>
   <div class="prose"><ul>
-    <li><b>뜻:</b> 블록 수를 SM 수의 몇 배로 고정하고, 스레드 하나가 여러 원소를 반복해서 맡습니다.</li>
+    <li><b>뜻:</b> <button class="t" data-t="gridstride">Grid-stride loop</button>는 블록 수를 SM 수의 몇 배로 고정하고, 스레드 하나가 여러 숫자를 반복해서 맡는 방식입니다.</li>
+    <li><b>예시:</b> 블록을 1,056개만 띄우면 스레드는 약 27만 개입니다. 숫자 100만 개를 맡으려면 스레드 하나가 숫자를 3에서 4개씩 차례로 처리합니다.</li>
     <li><b>해결하는 단점:</b> 데이터가 커져도 블록 수가 고정돼서, 꼬리 효과가 줄어듭니다.</li>
   </ul></div>
   <pre><code>for (int i = blockIdx.x * blockDim.x + threadIdx.x; i &lt; n; i += gridDim.x * blockDim.x)
@@ -688,7 +822,7 @@ brighten&lt;&lt;&lt;grid, block&gt;&gt;&gt;(img);</code></pre>
   </ul></div>
   <h3>3. Stream-K, Split-K</h3>
   <div class="prose"><ul>
-    <li><b>뜻:</b> 행렬 곱셈의 작업을 SM 수에 맞게 잘게 나눠, 모든 SM이 거의 같이 끝나게 합니다.</li>
+    <li><b>뜻:</b> 행렬 곱셈의 일을 SM 수에 맞게 잘게 나눠, 모든 SM이 거의 같이 끝나게 합니다.</li>
     <li><b>해결하는 단점:</b> 행렬 곱셈의 꼬리 효과를 줄입니다.</li>
   </ul></div>
   <h3>4. grid.sync()</h3>
@@ -700,6 +834,7 @@ brighten&lt;&lt;&lt;grid, block&gt;&gt;&gt;(img);</code></pre>
 
 <section class="ch" id="s4-9">
   <div class="ch-head"><span class="ch-num">4.9</span><h2>대안과의 비교</h2></div>
+  <p class="prose">블록을 몇 개 띄우느냐에 따라 꼬리 효과와 구현 난이도가 달라집니다.</p>
   <div class="tbl"><table>
     <thead><tr><th>방식</th><th>블록 수</th><th>꼬리 효과</th><th>특징</th></tr></thead>
     <tbody>
@@ -716,7 +851,7 @@ brighten&lt;&lt;&lt;grid, block&gt;&gt;&gt;(img);</code></pre>
   <h3>1. 하드웨어가 일을 나눠 줍니다: Cluster Launch Control</h3>
   <div class="prose"><ul>
     <li>데이터센터용 Blackwell은 Cluster Launch Control, 줄여서 <button class="t" data-t="clc">CLC</button>를 지원합니다.</li>
-    <li>먼저 올라간 블록이, 아직 시작하지 않은 블록의 일을 가져갑니다. 일을 빼앗긴 블록은 실행이 취소됩니다.</li>
+    <li>먼저 올라간 블록이, 아직 시작하지 않은 블록의 일을 가져가서 대신 처리합니다. 일을 넘긴 블록은 실행되지 않습니다.</li>
     <li>다른 커널이 SM 일부를 쓰고 있어도 일이 고르게 나뉩니다. 4.8에서 본 Persistent Kernel을 하드웨어가 돕는 셈입니다.</li>
   </ul></div>
   <h3>2. 들쭉날쭉한 입력이 과제입니다</h3>
@@ -725,9 +860,7 @@ brighten&lt;&lt;&lt;grid, block&gt;&gt;&gt;(img);</code></pre>
     <li>그래서 Stream-K나 Persistent Kernel처럼 블록 수를 SM 수에 맞추는 방식이 널리 쓰입니다.</li>
   </ul></div>
   <h3>3. SM이 늘수록 꼬리 효과가 커집니다</h3>
-  <div class="prose"><ul>
-    <li>Rubin은 SM이 224개입니다. 한 wave에 들어가는 블록이 많아져서, 작은 작업일수록 GPU를 다 채우기 어렵습니다.</li>
-  </ul></div>
+  <p class="prose">Rubin은 SM이 224개입니다. 한 wave에 들어가는 블록이 많아져서, 작은 작업일수록 GPU를 다 채우기 어렵습니다.</p>
   <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>그리드는 "데이터 크기만큼 띄우는 것"에서 "SM 수만큼 띄우고 일을 나눠 주는 것"으로 바뀌고 있습니다.</b></div>
 </section>
 
@@ -740,9 +873,10 @@ brighten&lt;&lt;&lt;grid, block&gt;&gt;&gt;(img);</code></pre>
 
 <section class="ch" id="s5-1">
   <div class="ch-head"><span class="ch-num">5.1</span><h2>정의</h2></div>
-  <p class="lead"><button class="t" data-t="warp">warp</button>는 <b>하드웨어가 실제로 한꺼번에 실행하는 32개 스레드 묶음</b>입니다.</p>
+  <p class="lead"><button class="t" data-t="warp">warp</button>는 <b>하드웨어가 실제로 한꺼번에 실행하는 스레드 32개 묶음</b>입니다.</p>
   <div class="prose"><ul>
-    <li>32개 스레드가 같은 명령을 각자 다른 데이터에 동시에 실행합니다. 이걸 SIMT, 즉 명령 하나에 스레드 여러 개라고 부릅니다.</li>
+    <li>32개 스레드가 같은 명령을 각자 다른 데이터에 동시에 실행합니다. 오늘 예시라면 숫자 32개에 "2를 곱하라"는 명령 하나가 동시에 실행됩니다.</li>
+    <li>이 방식을 SIMT, 즉 명령 하나에 스레드 여러 개라고 부릅니다.</li>
     <li>프로그래머가 만들지 않습니다. 하드웨어가 블록을 32개씩 자동으로 나눕니다.</li>
     <li>이름은 베틀에 나란히 걸린 날실, 영어로 warp에서 왔습니다. 실이라는 뜻의 thread와 짝을 이루는 말입니다.</li>
   </ul></div>
@@ -751,7 +885,7 @@ brighten&lt;&lt;&lt;grid, block&gt;&gt;&gt;(img);</code></pre>
 <section class="ch" id="s5-2">
   <div class="ch-head"><span class="ch-num">5.2</span><h2>등장 배경</h2></div>
   <div class="prose"><ul>
-    <li>스레드마다 명령을 따로 읽고 해석하면, 제어 회로가 계산 회로보다 커집니다.</li>
+    <li>스레드마다 명령을 따로 읽고 해석하면, 명령을 다루는 회로가 계산 회로보다 커집니다.</li>
     <li>그래픽에서는 이웃한 픽셀들이 거의 같은 계산을 했습니다. 명령을 함께 써도 손해가 적었습니다.</li>
   </ul></div>
   <div class="callout idea">
@@ -767,37 +901,52 @@ brighten&lt;&lt;&lt;grid, block&gt;&gt;&gt;(img);</code></pre>
 
 <section class="ch" id="s5-3">
   <div class="ch-head"><span class="ch-num">5.3</span><h2>구조</h2></div>
+  <p class="prose">블록은 블록 안 번호 순서대로 32개씩 잘려 warp가 됩니다. 오늘 예시의 256 스레드 블록은 warp 8개입니다.</p>
+  <figure class="fig">
+    <div class="fig-title">블록 하나를 warp 8개로 나누기</div>
+    <div class="scroll-x"><svg id="warpSvg" viewBox="0 0 640 250" width="100%" style="min-width:560px" role="img" aria-label="스레드 256개짜리 블록이 32개씩 warp 0부터 warp 7까지 여덟 줄로 나뉩니다. 70번 스레드는 warp 2의 lane 6입니다"></svg></div>
+    <div class="legend"><span><i class="sw" style="background:var(--accent)"></i>스레드</span><span><i class="sw" style="background:var(--tensor)"></i>예: 70번 스레드 (warp 2, lane 6)</span></div>
+    <figcaption>한 줄이 warp 하나입니다. 줄 안의 자리 번호가 lane입니다.</figcaption>
+  </figure>
   <div class="tbl"><table>
     <thead><tr><th>구성</th><th>뜻</th><th>H100 기준</th></tr></thead>
     <tbody>
       <tr><td>나누는 규칙</td><td>블록 안 번호 순서대로 32개씩</td><td>0번에서 31번, 32번에서 63번 …</td></tr>
-      <tr><td>lane</td><td>warp 안에서의 번호</td><td>0부터 31</td></tr>
-      <tr><td><button class="t" data-t="scheduler">Warp Scheduler</button></td><td>매 사이클 warp 하나에 명령을 줌</td><td class="num">SM당 4개</td></tr>
-      <tr><td>SM당 최대 warp</td><td>동시에 대기할 수 있는 warp</td><td class="num">64개</td></tr>
+      <tr><td><button class="t" data-t="lane">lane</button></td><td>warp 안에서의 자리 번호</td><td>0부터 31</td></tr>
+      <tr><td><button class="t" data-t="scheduler">Warp Scheduler</button></td><td>매 사이클 warp 하나에 명령을 줌</td><td>SM당 4개</td></tr>
+      <tr><td>SM당 최대 warp</td><td>동시에 대기할 수 있는 warp</td><td>64개</td></tr>
       <tr><td>warpgroup</td><td>Tensor Core 명령을 함께 내는 warp 4개</td><td>H100부터, 128 스레드</td></tr>
     </tbody>
   </table></div>
   <details>
     <summary>Q. 기초 · 내가 몇 번 warp의 몇 번 lane인지는 어떻게 구하나요?</summary>
-    <div class="prose"><p>블록 안 번호인 threadIdx.x를 32로 나눈 몫이 warp 번호이고, 나머지가 lane 번호입니다. 예를 들어 70번 스레드는 2번 warp의 6번 lane입니다.</p></div>
+    <div class="prose"><p>블록 안 번호인 <code>threadIdx.x</code>를 32로 나눈 몫이 warp 번호이고, 나머지가 lane 번호입니다. 예를 들어 70번 스레드는 2번 warp의 6번 lane입니다.</p></div>
   </details>
 </section>
 
 <section class="ch" id="s5-4">
   <div class="ch-head"><span class="ch-num">5.4</span><h2>작동 방식</h2></div>
+  <p class="prose">warp가 성능에 주는 영향은 세 가지 장면에서 드러납니다. 길이 갈릴 때, 메모리를 읽을 때, 값을 주고받을 때입니다.</p>
   <h3>1. 분기 (Divergence)</h3>
-  <p class="prose">2회차 1.7에서 본 <button class="t" data-t="divergence">분기</button>를 코드로 보면 이렇습니다.</p>
+  <p class="prose">2회차 1.7에서 본 <button class="t" data-t="divergence">분기</button>, 즉 같은 warp의 스레드가 if문에서 서로 다른 길로 가는 것을 코드로 보면 이렇습니다.</p>
   <pre><code>if (threadIdx.x % 2 == 0) A(); else B();         // 나쁨: 같은 warp 안에서 갈림. A와 B를 차례로 실행
 if ((threadIdx.x / 32) % 2 == 0) A(); else B();  // 좋음: warp 단위로 갈림. 손해 없음</code></pre>
   <div class="prose"><ul>
     <li>첫 줄은 같은 warp 안에서 짝수와 홀수가 갈립니다. A와 B를 차례로 실행해서 시간이 두 배 걸립니다.</li>
     <li>둘째 줄은 warp 단위로 갈립니다. 어떤 warp는 A만, 다른 warp는 B만 실행해서 손해가 없습니다.</li>
   </ul></div>
+  <figure class="fig">
+    <div class="fig-title">분기할 때 lane 32개가 시간을 쓰는 모습</div>
+    <div class="scroll-x"><svg id="divSvg" viewBox="0 0 640 230" width="100%" style="min-width:560px" role="img" aria-label="나쁜 예는 짝수 lane이 A를 하는 동안 홀수 lane이 쉬고, 다음 차례에 반대로 쉬어서 두 차례가 걸립니다. 좋은 예는 warp 0이 A, warp 1이 B를 한 차례에 끝냅니다"></svg></div>
+    <div class="legend"><span><i class="sw" style="background:var(--accent)"></i>A 실행</span><span><i class="sw" style="background:var(--tensor)"></i>B 실행</span><span><i class="sw" style="background:var(--idle)"></i>쉼</span></div>
+    <figcaption>가로 한 줄이 warp 하나의 lane 32개, 세로가 시간 차례입니다.</figcaption>
+  </figure>
   <h3>2. 메모리 병합 (Coalescing)</h3>
   <div class="prose"><ul>
     <li>warp의 32개 스레드가 이웃한 주소를 읽으면, 하드웨어가 읽기를 몇 번으로 합칩니다. 이걸 <button class="t" data-t="coalescing">메모리 병합</button>이라고 합니다.</li>
     <li>예를 들어 4바이트 숫자 32개, 모두 128바이트를 32바이트 묶음 네 번으로 읽습니다.</li>
     <li>주소가 흩어져 있으면 묶음을 따로따로 읽어서 최대 32번까지 늘어납니다.</li>
+    <li>오늘 예시는 스레드 0번이 숫자 0번, 1번이 1번을 읽으니 이웃한 주소입니다. 병합이 잘 되는 좋은 경우입니다.</li>
   </ul></div>
   <figure class="fig">
     <div class="fig-title">메모리 병합 비교</div>
@@ -812,16 +961,21 @@ if ((threadIdx.x / 32) % 2 == 0) A(); else B();  // 좋음: warp 단위로 갈�
     <li><code>__shfl_down_sync</code>로 Shared Memory를 거치지 않고 다른 lane의 레지스터 값을 직접 받습니다. 이걸 <button class="t" data-t="shuffle">warp shuffle</button>이라고 합니다.</li>
     <li>32개 값의 합계를 다섯 번 만에 구합니다. 16칸, 8칸, 4칸, 2칸, 1칸 떨어진 값을 차례로 받아 더합니다.</li>
   </ul></div>
+  <figure class="fig">
+    <div class="fig-title">shuffle로 32개 값을 다섯 번 만에 더하기</div>
+    <div class="scroll-x"><svg id="shufSvg" viewBox="0 0 640 230" width="100%" style="min-width:560px" role="img" aria-label="lane 32개의 값이 16칸 떨어진 값을 받아 16개가 되고, 8, 4, 2, 1칸을 차례로 받아 합계 1개가 됩니다"></svg></div>
+    <figcaption>줄마다 값을 아직 들고 있는 lane만 칠했습니다. 선 두 개가 만나는 칸이 자기 값과 떨어진 lane의 값을 더한 결과입니다.</figcaption>
+  </figure>
   <details>
     <summary>Q. Volta부터 생긴 독립 스레드 스케줄링은 무엇이 바뀌었나요?</summary>
-    <div class="prose"><p>스레드마다 프로그램 카운터를 따로 둬서, 분기 중에도 스레드끼리 서로를 기다리는 코드가 멈추지 않게 됐습니다. 다만 분기의 시간 손해는 그대로입니다. 갈린 길은 여전히 차례로 실행됩니다.</p></div>
+    <div class="prose"><p>스레드마다 다음 명령 위치, 즉 프로그램 카운터를 따로 두게 됐습니다. 그래서 분기 중에도 스레드끼리 서로를 기다리는 코드가 멈추지 않습니다. 다만 분기의 시간 손해는 그대로입니다. 갈린 길은 여전히 차례로 실행됩니다.</p></div>
   </details>
 </section>
 
 <section class="ch" id="s5-5">
   <div class="ch-head"><span class="ch-num">5.5</span><h2>이점</h2></div>
   <div class="prose"><ul>
-    <li><b>제어 회로를 아낍니다:</b> 명령 해석을 32개가 함께 해서, 같은 면적에 계산 유닛을 더 넣습니다. 2회차에서 본 SM 하나에 CUDA Core 128개가 그 결과입니다.</li>
+    <li><b>명령 회로를 아낍니다:</b> 명령 해석을 32개가 함께 해서, 같은 면적에 계산 유닛을 더 넣습니다. 2회차에서 본 SM 하나에 CUDA Core 128개가 그 결과입니다.</li>
     <li><b>바꾸는 비용이 없습니다:</b> warp마다 레지스터가 따로 있어서 매 사이클 다른 warp로 바꿀 수 있습니다. 2회차의 <button class="t" data-t="latency">지연 은닉</button>이 이 덕분입니다.</li>
     <li><b>메모리를 묶어 읽습니다:</b> 이웃 주소를 읽으면 32번 읽을 것을 네 번으로 줄입니다.</li>
   </ul></div>
@@ -831,7 +985,7 @@ if ((threadIdx.x / 32) % 2 == 0) A(); else B();  // 좋음: warp 단위로 갈�
   <div class="ch-head"><span class="ch-num">5.6</span><h2>부재 시 문제</h2></div>
   <p class="prose">warp 같은 묶음이 없다고 가정해 보면, 이런 문제가 생깁니다.</p>
   <div class="prose"><ul>
-    <li>스레드마다 명령을 따로 처리해야 해서, CPU처럼 제어 회로가 커집니다.</li>
+    <li>스레드마다 명령을 따로 처리해야 해서, CPU처럼 명령 회로가 커집니다.</li>
     <li>같은 칩 면적에 넣을 수 있는 계산 유닛이 크게 줄어듭니다.</li>
     <li>메모리를 스레드마다 따로 읽어서 대역폭을 많이 씁니다.</li>
   </ul></div>
@@ -856,14 +1010,24 @@ if ((threadIdx.x / 32) % 2 == 0) A(); else B();  // 좋음: warp 단위로 갈�
   </ul></div>
   <h3>2. SoA 데이터 배치</h3>
   <div class="prose"><ul>
-    <li><b>뜻:</b> 구조체의 배열, 즉 AoS 대신 배열의 구조체, 즉 SoA로 저장합니다. 점마다 x, y, z를 묶어 두지 않고, x끼리, y끼리, z끼리 모읍니다.</li>
+    <li><b>뜻:</b> 점마다 x, y, z를 묶어 저장하지 않고, x끼리, y끼리, z끼리 모아 저장합니다. 앞의 방식을 AoS, 즉 구조체의 배열이라 하고, 뒤의 방식을 <button class="t" data-t="soa">SoA</button>, 즉 배열의 구조체라고 합니다.</li>
     <li><b>해결하는 단점:</b> 이웃한 스레드가 이웃한 주소를 읽게 돼서, 메모리 병합이 됩니다.</li>
   </ul></div>
-  <h3>3. <button class="t" data-t="warpspec">Warp Specialization</button></h3>
+  <div class="tbl"><table>
+    <thead><tr><th>저장 방식</th><th>메모리에 놓이는 순서</th><th>스레드들이 x만 읽을 때</th></tr></thead>
+    <tbody>
+      <tr><td>AoS (구조체의 배열)</td><td><code>x0 y0 z0 x1 y1 z1 …</code></td><td>주소가 띄엄띄엄, 병합 안 됨</td></tr>
+      <tr><td>SoA (배열의 구조체)</td><td><code>x0 x1 x2 … y0 y1 y2 …</code></td><td>주소가 이웃, 병합 됨</td></tr>
+    </tbody>
+  </table></div>
+  <h3>3. Warp Specialization</h3>
   <div class="prose"><ul>
-    <li><b>뜻:</b> warp마다 역할을 나눕니다. 일부 warp는 데이터만 불러오고, 나머지 warp는 계산만 합니다. FlashAttention-3이 대표 예입니다.</li>
+    <li><b>뜻:</b> <button class="t" data-t="warpspec">Warp Specialization</button>은 warp마다 역할을 나누는 방식입니다. 일부 warp는 데이터만 불러오고, 나머지 warp는 계산만 합니다. FlashAttention-3이 대표 예입니다.</li>
     <li><b>해결하는 단점:</b> 데이터 불러오기와 계산을 겹쳐 기다림을 숨깁니다.</li>
   </ul></div>
+  <figure class="fig"><pre class="mermaid">flowchart LR
+  P["불러오는 warp&lt;br&gt;VRAM에서 다음 데이터 가져오기"] -->|"Shared Memory에 넣어 둠"| C["계산하는 warp&lt;br&gt;Tensor Core로 곱하기"]
+  C -->|"다 썼으니 다음 것 달라고 알림"| P</pre></figure>
   <h3>4. warpSize 사용</h3>
   <div class="prose"><ul>
     <li><b>뜻:</b> 32를 코드에 직접 쓰지 않고 내장 변수 <code>warpSize</code>를 씁니다.</li>
@@ -873,7 +1037,8 @@ if ((threadIdx.x / 32) % 2 == 0) A(); else B();  // 좋음: warp 단위로 갈�
 
 <section class="ch" id="s5-9">
   <div class="ch-head"><span class="ch-num">5.9</span><h2>대안과의 비교</h2></div>
-  <div class="tbl"><table>
+  <p class="prose">다른 회사 칩에도 같은 묶음이 이름만 바꿔 있습니다. 2회차 1.9의 표와 이어지는 내용입니다.</p>
+  <div class="tbl wide"><table>
     <thead><tr><th>구분</th><th>NVIDIA warp</th><th>AMD wavefront</th><th>Intel 서브그룹</th><th>CPU SIMD (AVX-512)</th></tr></thead>
     <tbody>
       <tr><td>폭</td><td>32 스레드</td><td>64 (데이터센터용 CDNA), 32 (게이밍용 RDNA)</td><td>16 또는 32</td><td>FP32 16개</td></tr>
@@ -888,25 +1053,43 @@ if ((threadIdx.x / 32) % 2 == 0) A(); else B();  // 좋음: warp 단위로 갈�
   <div class="ch-head"><span class="ch-num">5.10</span><h2>최신 트렌드</h2></div>
   <h3>1. Warp Specialization이 표준이 됐습니다</h3>
   <div class="prose"><ul>
-    <li>5.8에서 본 Warp Specialization이 FlashAttention-3과 4, ThunderKittens, CUTLASS 같은 최신 고성능 커널의 기본 패턴이 됐습니다.</li>
+    <li>5.8에서 본 Warp Specialization이 FlashAttention-3과 4, ThunderKittens, CUTLASS 같은 최신 고성능 커널의 기본 방식이 됐습니다.</li>
     <li>FlashAttention-4는 B200에서 BF16 기준 최대 1,613 TFLOPS, 이론 성능의 약 71%를 냈다고 보고했습니다. cuDNN 9.13보다 최대 1.3배 빠릅니다.</li>
   </ul></div>
   <h3>2. Tensor Core 명령을 스레드 하나가 냅니다</h3>
   <div class="prose"><ul>
     <li>H100에서는 warp 4개, 즉 warpgroup이 함께 행렬 곱셈 명령을 냈습니다.</li>
-    <li>데이터센터용 Blackwell에서는 스레드 하나가 tcgen05라는 명령을 내고, 결과는 <button class="t" data-t="tmem">TMEM</button>이라는 전용 메모리에 쌓입니다.</li>
-    <li>레지스터 부담이 줄어서, warp마다 역할을 나누기가 더 쉬워졌습니다.</li>
+    <li>데이터센터용 Blackwell에서는 스레드 하나가 tcgen05라는 명령을 냅니다. 결과는 2회차 1.10에서 본 Tensor Core 전용 저장 공간, <button class="t" data-t="tmem">TMEM</button>에 쌓입니다.</li>
+    <li>결과를 레지스터에 두지 않아서 레지스터 부담이 줄고, warp마다 역할을 나누기가 더 쉬워졌습니다.</li>
     <li>게이밍용 RTX 5090에는 TMEM이 없어서 이 방식을 쓸 수 없습니다.</li>
   </ul></div>
   <h3>3. warp를 감추는 흐름</h3>
   <div class="prose"><ul>
-    <li>cuTile, Triton 같은 타일 모델은 warp를 코드에서 감춥니다.</li>
+    <li>cuTile, Triton 같은 타일 방식은 warp를 코드에서 감춥니다.</li>
     <li>warp를 직접 다룰지, 컴파일러에 맡길지가 성능과 생산성 사이의 선택이 됐습니다.</li>
   </ul></div>
   <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>최신 GPU에서 warp는 "같은 일을 하는 32개 묶음"에서 "역할을 나눠 맡는 단위"로 바뀌고 있습니다.</b></div>
 </section>
 
-<p class="prose">여기까지가 3회차였습니다. 2회차 Tensor Core에서 잠깐 본 FP32, BF16, FP8 같은 숫자 형식은 4회차에서 자세히 다룹니다.</p>
+<section class="ch" id="sum">
+  <div class="ch-head"><span class="ch-num">=</span><h2>정리: 오늘 예시를 다섯 단어로 다시 보면</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>단위</th><th>오늘 예시에서</th><th>누가 정하나</th></tr></thead>
+    <tbody>
+      <tr><td>커널</td><td><code>scale</code>, 숫자마다 2 곱하기</td><td>프로그래머</td></tr>
+      <tr><td>그리드</td><td>블록 3,907개, H100에서 약 3.7 wave</td><td>프로그래머</td></tr>
+      <tr><td>블록</td><td>스레드 256개, SM 하나에 머묾</td><td>프로그래머</td></tr>
+      <tr><td>warp</td><td>블록마다 8개, 예시 전체 31,256개</td><td>하드웨어</td></tr>
+      <tr><td>스레드</td><td>숫자 1개, 모두 1,000,192개 (192개는 쉼)</td><td>프로그래머</td></tr>
+    </tbody>
+  </table></div>
+  <figure class="fig"><pre class="mermaid">flowchart LR
+  CPU["CPU&lt;br&gt;scale 실행 지시"] --> G["그리드&lt;br&gt;블록 3,907개"]
+  G -->|"GigaThread Engine이&lt;br&gt;SM에 나눠 줌"| SM["SM&lt;br&gt;블록 8개씩"]
+  SM -->|"32개씩 자동으로 묶음"| W["warp&lt;br&gt;명령 하나를 32개가 함께"]
+  W --> T["스레드&lt;br&gt;숫자 하나에 2 곱하기"]</pre></figure>
+  <p class="prose">여기까지가 3회차였습니다. 2회차 Tensor Core에서 잠깐 본 FP32, BF16, FP8 같은 숫자 형식은 4회차에서 자세히 다룹니다.</p>
+</section>
 
 <section class="ch" id="refs">
   <div class="ch-head"><span class="ch-num">+</span><h2>참고</h2></div>
@@ -933,5 +1116,20 @@ if ((threadIdx.x / 32) % 2 == 0) A(); else B();  // 좋음: warp 단위로 갈�
 <script src="../assets/sessions.js"></script>
 <script src="../assets/site.js"></script>
 <script src="03.js"></script>
+<script type="module">
+import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.esm.min.mjs";
+const t = document.documentElement.getAttribute("data-theme");
+const dark = t ? t === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+mermaid.initialize({ startOnLoad: false, theme: dark ? "dark" : "neutral", fontFamily: "inherit" });
+// ponytail: theme set at load; toggling theme needs a reload to recolor diagrams
+let i = 0;
+for (const el of document.querySelectorAll("pre.mermaid")) {
+  const { svg } = await mermaid.render("mmd" + i++, el.textContent);
+  const box = document.createElement("div");
+  box.className = "mmd";
+  box.innerHTML = svg;
+  el.replaceWith(box);
+}
+</script>
 </body>
 </html>

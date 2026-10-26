@@ -137,7 +137,10 @@ header.site nav ul:last-child{gap:.25rem}
 button.hbtn{display:inline-flex;align-items:center;gap:.4rem;width:auto;margin:0;padding:.35rem .65rem;font-size:.85rem;line-height:1.2;background:transparent;color:var(--ink);border:1px solid var(--line);border-radius:8px;box-shadow:none}
 button.hbtn:hover{border-color:var(--accent)}
 button.hbtn kbd{font-size:.7rem;padding:.05rem .35rem}
-#theme{min-width:2.2rem;justify-content:center}
+#theme,#fsize{min-width:2.2rem;justify-content:center}
+#fsize small{font-size:.65rem;margin-left:-.3rem}
+:root[data-size="l"]{--pico-font-size:112.5%}
+:root[data-size="xl"]{--pico-font-size:125%}
 @media (max-width:640px){ li.nav-index{display:none} button.hbtn .lbl,button.hbtn kbd{display:none} }
 button.linkish{all:unset;cursor:pointer;color:var(--pico-primary);text-decoration:underline;text-underline-offset:3px}
 button.linkish:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
@@ -167,6 +170,11 @@ button.t.flash{animation:flash 1.6s ease-out}
 @keyframes flash{0%,30%{background:var(--accent);color:var(--pico-primary-inverse);box-shadow:0 0 0 4px var(--accent)}100%{background:transparent}}
 
 /* session extras */
+.part,section.ch{scroll-margin-top:.75rem}
+#fab{position:fixed;z-index:40;right:1rem;bottom:1rem;display:flex;gap:.35rem}
+#fab[hidden],body.drawer-open #fab{display:none}
+#fab button.hbtn{background:var(--surface);box-shadow:0 4px 14px rgba(0,0,0,.12);padding:.5rem .6rem}
+@media (max-width:640px){ #fab .lbl{display:none} }
 #progress{position:fixed;z-index:70;top:0;left:0;right:0;height:3px;background:var(--accent);transform:scaleX(0);transform-origin:0 50%}
 .meta{display:flex;flex-wrap:wrap;gap:.25rem 1rem;font-size:.88rem;color:var(--muted);margin:.25rem 0 .75rem}
 h2 a.anchor{opacity:0;text-decoration:none;color:var(--muted);font-weight:400;margin-left:.25rem}

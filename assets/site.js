@@ -49,11 +49,33 @@
   navUl.querySelectorAll("li").forEach(li => { if (li.textContent.trim() === "스터디 목차") li.classList.add("nav-index"); });
   navUl.insertAdjacentHTML("beforeend",
     `<li><button class="hbtn" id="open-gl" type="button" aria-label="용어 검색"><svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true"><circle cx="8.5" cy="8.5" r="5.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M13 13l4.5 4.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span class="lbl">용어 검색</span><kbd>/</kbd></button></li>
+     <li><button class="hbtn" id="fsize" type="button"></button></li>
      <li><button class="hbtn" id="theme" type="button"></button></li>`);
   const themeBtn = document.getElementById("theme");
   const paintTheme = () => { const t = store.get("theme") || ""; const label = THEMES.find(x => x[0] === t)[1]; themeBtn.textContent = { "": "◐", light: "☀", dark: "☾" }[t]; themeBtn.setAttribute("aria-label", `테마: ${label} (눌러서 바꾸기)`); themeBtn.title = `테마: ${label}`; };
   themeBtn.addEventListener("click", () => { const t = store.get("theme") || ""; const n = THEMES[(THEMES.findIndex(x => x[0] === t) + 1) % THEMES.length][0]; store.set("theme", n); applyTheme(n); paintTheme(); });
   paintTheme();
+
+  /* 글자 크기: 화면 공유로 발표할 때 키운다 */
+  const SIZES = [["", "보통"], ["l", "크게"], ["xl", "아주 크게"]];
+  const fsBtn = document.getElementById("fsize");
+  const paintSize = () => { const z = store.get("fsize") || ""; z ? document.documentElement.dataset.size = z : delete document.documentElement.dataset.size; fsBtn.innerHTML = `가<small>${{ "": "", l: "+", xl: "++" }[z]}</small>`; fsBtn.setAttribute("aria-label", `글자 크기: ${SIZES.find(x => x[0] === z)[1]} (눌러서 바꾸기)`); fsBtn.title = `글자 크기: ${SIZES.find(x => x[0] === z)[1]}`; };
+  fsBtn.addEventListener("click", () => { const z = store.get("fsize") || ""; store.set("fsize", SIZES[(SIZES.findIndex(x => x[0] === z) + 1) % SIZES.length][0]); paintSize(); });
+  paintSize();
+
+  /* 떠 있는 이동 버튼: 맨 위로, 회차 페이지에서는 이전·다음 장 (키보드 j/k) */
+  const chapters = [...document.querySelectorAll("main .part, main section.ch")];
+  const smooth = matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+  const goChapter = d => {
+    const t = d > 0 ? chapters.find(n => n.getBoundingClientRect().top > 8) : chapters.filter(n => n.getBoundingClientRect().top < -8).pop();
+    t ? t.scrollIntoView({ behavior: smooth }) : d < 0 && scrollTo({ top: 0, behavior: smooth });
+  };
+  const arrow = d => `<svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="${d}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+  document.body.insertAdjacentHTML("beforeend", `<div id="fab" hidden>${chapters.length ? `<button class="hbtn" type="button" data-go="-1" aria-label="이전 장" title="이전 장 (k)">${arrow("M5 12l5-5 5 5")}</button><button class="hbtn" type="button" data-go="1" aria-label="다음 장" title="다음 장 (j)">${arrow("M5 8l5 5 5-5")}</button>` : ""}<button class="hbtn" type="button" data-go="top" aria-label="맨 위로" title="맨 위로">${arrow("M5 10l5-5 5 5M10 5v11")}<span class="lbl">맨 위로</span></button></div>`);
+  const fab = document.getElementById("fab");
+  fab.addEventListener("click", e => { const b = e.target.closest("[data-go]"); if (!b) return; b.dataset.go === "top" ? scrollTo({ top: 0, behavior: smooth }) : goChapter(+b.dataset.go); });
+  const paintFab = () => { fab.hidden = scrollY < innerHeight * 0.6; };
+  addEventListener("scroll", paintFab, { passive: true }); paintFab();
 
   /* 용어 서랍 (용어 사전 페이지 밖) */
   let drawer = null, openDrawer = () => {}, closeDrawer = () => {};
@@ -135,6 +157,7 @@
   document.addEventListener("keydown", e => {
     const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName);
     if (e.key === "/" && !typing) { e.preventDefault(); document.getElementById("open-gl").click(); }
+    else if ((e.key === "j" || e.key === "k") && !typing && chapters.length && !e.metaKey && !e.ctrlKey && !e.altKey) goChapter(e.key === "j" ? 1 : -1);
     else if (e.key === "Escape") { if (!pop.hidden) hide(); else if (drawer && !drawer.hidden) closeDrawer(true); }
   });
 

@@ -1,0 +1,977 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>4회차 · FP32, FP16, BF16, FP8, INT8 · 도메인 스터디</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.0.6/css/pico.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="../assets/site.css">
+<script>try{var t=localStorage.getItem("theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+</head>
+<body data-root="..">
+<header class="site"><nav class="container">
+  <ul><li><a class="brand" href="../">도메인 스터디</a></li></ul>
+  <ul><li><a href="../">스터디 목차</a></li><li><a href="../structure.html">구조도</a></li><li><a href="../glossary.html">용어 사전</a></li></ul>
+</nav></header>
+
+<div class="container doc">
+<aside class="toc"><details open><summary>이 회차 목차</summary><ol id="toc"></ol></details></aside>
+<main>
+<header class="doc-head">
+  <div class="crumb"><a href="../">스터디 목차</a> / GPU 기본 구조 / 4회차</div>
+  <h1>4회차 · FP32, FP16, BF16, FP8, INT8</h1>
+  <p>지난 3회차에서는 GPU에 일을 나누는 단위, 커널과 스레드와 warp를 봤습니다. 오늘은 그 스레드 하나하나가 계산하는 숫자 안으로 들어가 보겠습니다. 2회차 3.4에서 표로만 훑어본 FP32, FP16, BF16, FP8, INT8이 오늘의 주인공입니다.</p>
+  <h3>오늘의 예시: 70B 모델을 H100 한 장에 올리기</h3>
+  <p>오늘은 예시 하나를 끝까지 들고 가겠습니다. 파라미터가 700억 개인 70B 모델을 <button class="t" data-t="h100">H100</button> SXM 한 장, 즉 <button class="t" data-t="vram">VRAM</button> 80GB에 올리려고 합니다.</p>
+  <ul>
+    <li>파라미터 하나를 몇 바이트로 저장하느냐에 따라 모델 크기가 달라집니다.</li>
+    <li>FP32로 저장하면 700억 곱하기 4바이트, 280GB입니다. 한 장에 올라가지 않습니다.</li>
+    <li>오늘 볼 다섯 형식은 숫자 하나를 몇 비트로, 어떤 방식으로 저장할지에 대한 약속입니다.</li>
+  </ul>
+  <div class="tbl"><table>
+    <thead><tr><th>형식</th><th>한 줄 뜻</th><th>파라미터당 바이트</th><th>70B 가중치</th><th>H100 한 장 (80GB)에</th></tr></thead>
+    <tbody>
+      <tr><td>FP32</td><td>32비트 실수, 기준 형식</td><td class="num">4</td><td class="num">280GB</td><td>안 올라감</td></tr>
+      <tr><td>FP16</td><td>16비트 실수, 범위가 좁음</td><td class="num">2</td><td class="num">140GB</td><td>안 올라감</td></tr>
+      <tr><td>BF16</td><td>16비트 실수, 범위는 FP32와 같음</td><td class="num">2</td><td class="num">140GB</td><td>안 올라감</td></tr>
+      <tr><td>FP8</td><td>8비트 실수, 배율과 함께 씀</td><td class="num">1</td><td class="num">70GB</td><td>간신히 올라감</td></tr>
+      <tr><td>INT8</td><td>8비트 정수, 배율과 함께 씀</td><td class="num">1</td><td class="num">70GB</td><td>간신히 올라감</td></tr>
+    </tbody>
+  </table></div>
+  <p>기준 제품은 앞 회차와 같은 NVIDIA H100 SXM입니다. 성능 수치는 희소성을 뺀 dense 기준입니다.</p>
+  <details>
+    <summary>Q. 기초 · 비트와 바이트는 무엇이 다른가요?</summary>
+    <div class="prose"><p>비트는 0 또는 1을 담는 한 칸입니다. 바이트는 비트 8개입니다. FP32는 32비트라서 4바이트, BF16은 2바이트, FP8과 INT8은 1바이트입니다.</p></div>
+  </details>
+  <details>
+    <summary>Q. "간신히 올라간다"는 건 무슨 뜻인가요?</summary>
+    <div class="prose"><p>가중치 70GB를 올리면 남는 자리는 10GB 정도입니다. 계산 중간값과 KV 캐시가 들어갈 자리가 모자라서, 실제 서비스에서는 두 장에 나눠 담거나 4비트로 더 줄입니다. KV 캐시는 20회차에서 다룹니다.</p></div>
+  </details>
+
+  <h3>먼저 알아 둘 것: 실수를 저장하는 방법</h3>
+  <ul>
+    <li>컴퓨터는 실수를 부호, 지수, 가수 세 부분으로 나눠 저장합니다. 1.234 곱하기 10의 5제곱 같은 과학적 표기를 2진수로 바꾼 것입니다. 이걸 <button class="t" data-t="floating">부동소수점</button>, 영어로 Floating Point라고 합니다.</li>
+    <li><b>지수 비트는 범위를 정합니다.</b> 얼마나 크고 얼마나 작은 수까지 담을지입니다.</li>
+    <li><b>가수 비트는 정밀도를 정합니다.</b> 유효숫자를 몇 자리까지 담을지입니다. 둘을 함께 <button class="t" data-t="expmant">지수와 가수</button>라고 부릅니다.</li>
+    <li>지수는 자의 길이, 가수는 자의 눈금 간격과 비슷합니다.</li>
+    <li>같은 비트 수 안에서 지수와 가수에 몇 비트씩 나누느냐가 형식의 성격을 정합니다.</li>
+  </ul>
+  <pre><code>FP32  [S][EEEEEEEE][MMMMMMMMMMMMMMMMMMMMMMM]   1 + 8 + 23 = 32비트
+TF32  [S][EEEEEEEE][MMMMMMMMMM]                1 + 8 + 10 (Tensor Core 안에서만 씀)
+FP16  [S][EEEEE][MMMMMMMMMM]                   1 + 5 + 10 = 16비트
+BF16  [S][EEEEEEEE][MMMMMMM]                   1 + 8 + 7  = 16비트  ← 지수가 FP32와 같음
+FP8   [S][EEEE][MMM]   (E4M3)                  1 + 4 + 3  = 8비트
+FP8   [S][EEEEE][MM]   (E5M2)                  1 + 5 + 2  = 8비트
+INT8  [S][VVVVVVV]                             정수 -128 ~ 127 (지수 없음, 간격이 균일)</code></pre>
+  <div class="tbl wide"><table>
+    <thead><tr><th>형식</th><th>부호 · 지수 · 가수</th><th>최대값</th><th>유효숫자 (대략)</th><th>H100 SXM 성능 (dense)</th></tr></thead>
+    <tbody>
+      <tr><td>FP32</td><td>1 · 8 · 23</td><td class="num">약 3.4×10³⁸</td><td>약 7자리</td><td class="num">67 TFLOPS (CUDA Core)</td></tr>
+      <tr><td>TF32</td><td>1 · 8 · 10</td><td class="num">약 3.4×10³⁸</td><td>약 3자리</td><td class="num">495 TFLOPS</td></tr>
+      <tr><td>FP16</td><td>1 · 5 · 10</td><td class="num">65,504</td><td>약 3자리</td><td class="num">989 TFLOPS</td></tr>
+      <tr><td>BF16</td><td>1 · 8 · 7</td><td class="num">약 3.4×10³⁸</td><td>약 2자리</td><td class="num">989 TFLOPS</td></tr>
+      <tr><td>FP8 E4M3</td><td>1 · 4 · 3</td><td class="num">448</td><td>약 1자리</td><td class="num">1,979 TFLOPS</td></tr>
+      <tr><td>FP8 E5M2</td><td>1 · 5 · 2</td><td class="num">57,344</td><td>1자리 미만</td><td class="num">1,979 TFLOPS</td></tr>
+      <tr><td>INT8</td><td>정수 8비트</td><td class="num">127 (배율을 곱함)</td><td>균일한 256단계</td><td class="num">1,979 TOPS</td></tr>
+    </tbody>
+  </table></div>
+  <figure class="fig">
+    <div class="fig-title">숫자 하나를 형식별로 저장해 보기</div>
+    <div class="seg" id="f-num"></div>
+    <div class="scroll-x"><svg id="fSvg" viewBox="0 0 640 250" width="100%" style="min-width:560px" role="img" aria-label="고른 숫자를 FP32, BF16, FP16, FP8 E4M3, FP8 E5M2로 저장했을 때의 비트와 저장된 값"></svg></div>
+    <div class="legend"><span><i class="sw" style="background:var(--off)"></i>부호</span><span><i class="sw" style="background:var(--accent)"></i>지수 (범위)</span><span><i class="sw" style="background:var(--tensor)"></i>가수 (정밀도)</span></div>
+    <figcaption>칸 하나가 비트 하나입니다. 색이 진한 칸이 1입니다. 오른쪽 값은 실제로 저장되는 값과 원래 값과의 차이입니다. 가장 가까운 값으로 반올림했고, E4M3는 448을 넘으면 넘침으로 표시합니다.</figcaption>
+  </figure>
+</header>
+
+<!-- ============ PART 1 : FP32 ============ -->
+<div class="part" id="p1">
+  <div class="pk">PART 1</div>
+  <h2>FP32 (Single Precision, 단정밀도)</h2>
+  <p>가장 기준이 되는 형식, FP32부터 보겠습니다.</p>
+</div>
+
+<section class="ch" id="s1-1">
+  <div class="ch-head"><span class="ch-num">1.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="fp32">FP32</button>는 <b>32비트로 실수 하나를 저장하는 국제 표준 형식</b>이고, 딥러닝 정확도의 기준선입니다.</p>
+  <div class="prose"><ul>
+    <li>정식 이름은 IEEE 754 binary32입니다. 부호 1비트, 지수 8비트, 가수 23비트입니다.</li>
+    <li>유효숫자는 약 7자리이고, 약 10의 38제곱까지 담습니다.</li>
+    <li>PyTorch에서 따로 정하지 않으면 텐서는 FP32, 즉 <code>torch.float32</code>로 만들어집니다.</li>
+  </ul></div>
+  <details>
+    <summary>Q. 기초 · 0.1도 정확히 저장되지 않나요?</summary>
+    <div class="prose"><p>2진수로 쓰면 0.1은 끝없이 이어지는 소수라서, 가장 가까운 값으로 반올림해 저장합니다. FP32에 0.1을 넣으면 실제로는 0.100000001490116…이 저장됩니다. 모든 형식에서 저장은 곧 반올림이고, 비트가 적을수록 반올림 폭이 커집니다.</p></div>
+  </details>
+</section>
+
+<section class="ch" id="s1-2">
+  <div class="ch-head"><span class="ch-num">1.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li>1980년대 초까지는 컴퓨터 회사마다 실수를 저장하는 방식이 달랐습니다.</li>
+    <li>같은 계산도 기계마다 결과가 달라서, 프로그램을 옮기면 답이 바뀌었습니다.</li>
+  </ul></div>
+  <div class="callout idea">
+    <span class="say">"그럼 실수를 저장하고 반올림하는 규칙을 모두 같게 정하자!"</span>
+    그래서 1985년 등장한 것이 바로 <b><button class="t" data-t="ieee754">IEEE 754</button> 표준</b>이고, 그 32비트 형식이 FP32입니다.
+    <ul>
+      <li>1980년 Intel 8087 수치 보조 프로세서의 설계가 표준의 바탕이 됐습니다.</li>
+      <li>그래픽, 과학 계산, 초기 딥러닝까지 모두 FP32를 기본으로 썼습니다.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="ch" id="s1-3">
+  <div class="ch-head"><span class="ch-num">1.3</span><h2>구조</h2></div>
+  <h3>1. 비트 배치</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>부분</th><th>비트</th><th>하는 일</th></tr></thead>
+    <tbody>
+      <tr><td>부호</td><td class="num">1</td><td>양수인지 음수인지</td></tr>
+      <tr><td>지수</td><td class="num">8</td><td>2의 몇 제곱인지. 저장한 값에서 127을 빼서 씀</td></tr>
+      <tr><td>가수</td><td class="num">23</td><td>소수점 아래 자리. 맨 앞의 1은 저장하지 않음</td></tr>
+    </tbody>
+  </table></div>
+  <div class="prose"><ul>
+    <li>값은 부호, 곱하기 1.가수, 곱하기 2의 "지수 빼기 127" 제곱입니다.</li>
+  </ul></div>
+  <h3>2. 특수한 값</h3>
+  <div class="prose"><ul>
+    <li>0, 양과 음의 무한대, 계산할 수 없는 값을 뜻하는 <button class="t" data-t="nan">NaN</button>을 따로 정해 둡니다. NaN은 Not a Number의 줄임말입니다.</li>
+    <li>0에 아주 가까운 값을 담는 비정규 수도 있습니다.</li>
+  </ul></div>
+  <details>
+    <summary>Q. 학습 중 loss가 NaN이 됐다는 건 무슨 뜻인가요?</summary>
+    <div class="prose"><p>값이 범위를 넘어 무한대가 되고, 무한대끼리 빼거나 나누면 NaN이 됩니다. 한 번 생기면 이후 모든 계산으로 번져서 학습이 망가집니다. PART 2의 FP16에서 자주 겪는 문제입니다.</p></div>
+  </details>
+</section>
+
+<section class="ch" id="s1-4">
+  <div class="ch-head"><span class="ch-num">1.4</span><h2>작동 방식</h2></div>
+  <div class="prose"><ol>
+    <li><b>CUDA Core 계산:</b> FP32 계산은 주로 <button class="t" data-t="cudacore">CUDA Core</button>가 합니다. 2회차 2.4에서 계산해 본 67 TFLOPS가 이 값입니다.</li>
+    <li><b>Tensor Core 계산:</b> Tensor Core는 FP32를 그대로 받지 않고, TF32로 바꿔 계산합니다. 1.8에서 봅니다.</li>
+    <li><b>혼합 정밀도에서 남는 자리:</b> 16비트로 학습할 때도 정확해야 하는 값은 FP32로 남깁니다. 원본 가중치, 즉 <button class="t" data-t="masterw">master weights</button>와 옵티마이저 상태, 행렬 곱셈의 누적 합, 그리고 loss와 softmax와 정규화 계산입니다.</li>
+    <li><b>누적:</b> Tensor Core는 곱셈을 낮은 정밀도로 해도 합계는 FP32로 쌓습니다. 2회차 3.4에서 본 <button class="t" data-t="mixed">혼합 정밀도</button>입니다.</li>
+  </ol></div>
+  <div class="callout"><span class="ck">계산해 보기</span>Adam 옵티마이저로 혼합 정밀도 학습을 하면 파라미터 하나에 약 16바이트가 듭니다. 가중치 2, 그래디언트 2, FP32 원본 4, Adam 상태 두 개가 4씩입니다. 오늘 예시의 70B 모델이면 700억 곱하기 16, 약 1,120GB입니다. 활성값을 빼고도 H100 열네 장 분량입니다. 나눠 담는 방법은 18회차에서 다룹니다.</div>
+</section>
+
+<section class="ch" id="s1-5">
+  <div class="ch-head"><span class="ch-num">1.5</span><h2>이점</h2></div>
+  <div class="prose"><ul>
+    <li><b>안정적입니다:</b> 범위와 정밀도가 모두 넉넉해서 값이 넘치거나 사라지는 일이 드뭅니다. 디버깅도 쉽습니다.</li>
+    <li><b>어디서나 됩니다:</b> 모든 CPU와 GPU, 모든 라이브러리가 지원하는 안전한 기본값입니다.</li>
+    <li><b>기준이 됩니다:</b> 다른 형식의 정확도는 FP32 결과와 비교해서 잽니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-6">
+  <div class="ch-head"><span class="ch-num">1.6</span><h2>부재 시 문제</h2></div>
+  <p class="prose">FP32 같은 기준 정밀도가 없다고 가정해 보면, 이런 문제가 생깁니다.</p>
+  <div class="prose"><ul>
+    <li>16비트만으로 가중치를 고치면, 0.0001처럼 작은 업데이트가 반올림에 묻혀 사라집니다.</li>
+    <li>학습이 멈춘 것처럼 보이거나, 값이 튀어 발산합니다.</li>
+    <li>낮은 정밀도의 결과가 맞는지 비교할 기준도 없어집니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-7">
+  <div class="ch-head"><span class="ch-num">1.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>메모리가 두 배입니다:</b> 16비트 형식보다 메모리와 대역폭을 두 배 씁니다. 오늘 예시의 70B 모델은 FP32로 280GB입니다.</li>
+    <li><b>Tensor Core에서 느립니다:</b> H100 SXM에서 FP32는 67 TFLOPS, BF16은 989 TFLOPS입니다. 약 15배 차이입니다.</li>
+    <li><b>AI GPU에서 비중이 줄고 있습니다:</b> 칩 면적이 낮은 정밀도 쪽으로 옮겨 가고 있습니다. 1.10에서 봅니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-8">
+  <div class="ch-head"><span class="ch-num">1.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. TF32 (A100부터)</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> FP32를 입력으로 받아, Tensor Core 안에서만 가수를 10비트로 줄여 계산하는 형식입니다. 범위는 FP32와 같습니다. 2회차 2.8에서 본 <button class="t" data-t="tf32">TF32</button>입니다.</li>
+    <li><b>해결하는 단점:</b> 코드를 거의 고치지 않고 행렬 곱셈을 수 배 빠르게 합니다. H100 SXM에서 495 TFLOPS입니다.</li>
+  </ul></div>
+  <pre><code>torch.set_float32_matmul_precision("high")  # FP32 행렬 곱셈을 TF32 Tensor Core로. 기본값 "highest"는 순수 FP32</code></pre>
+  <details>
+    <summary>Q. TF32는 32비트인가요?</summary>
+    <div class="prose"><p>이름과 달리 실제로 쓰는 비트는 19개입니다. 부호 1, 지수 8, 가수 10입니다. 메모리에 저장하는 형식이 아니라 Tensor Core 안에서만 쓰는 계산 형식이라, 입력과 출력은 FP32 그대로입니다.</p></div>
+  </details>
+  <h3>2. 혼합 정밀도 학습, AMP</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 계산은 FP16이나 BF16으로 하고, 1.4에서 본 중요한 값만 FP32로 둡니다. AMP는 Automatic Mixed Precision의 줄임말입니다.</li>
+    <li><b>해결하는 단점:</b> 메모리를 줄이고 Tensor Core 속도를 얻으면서, 정확도는 FP32에 가깝게 지킵니다. PART 2와 PART 3에서 봅니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-9">
+  <div class="ch-head"><span class="ch-num">1.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>항목</th><th>FP32</th><th>TF32</th><th>BF16 혼합 정밀도</th></tr></thead>
+    <tbody>
+      <tr><td>코드 변경</td><td>없음</td><td>설정 한 줄</td><td>autocast 몇 줄</td></tr>
+      <tr><td>H100 SXM 속도</td><td class="num">67 TFLOPS</td><td class="num">495 TFLOPS</td><td class="num">989 TFLOPS</td></tr>
+      <tr><td>메모리</td><td>기준</td><td>기준 (저장은 FP32)</td><td>약 절반</td></tr>
+      <tr><td>정확도</td><td>기준</td><td>대부분 같음</td><td>대부분 같음</td></tr>
+      <tr><td>필요한 GPU</td><td>모든 GPU</td><td>Ampere (A100)부터</td><td>Ampere (A100)부터</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="ch" id="s1-10">
+  <div class="ch-head"><span class="ch-num">1.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. AI GPU에서 FP32와 FP64가 줄어듭니다</h3>
+  <div class="prose"><ul>
+    <li>2025년 나온 Blackwell Ultra, 즉 B300은 B200보다 FP64 성능을 크게 줄였습니다. NVIDIA HGX 자료 기준으로 GPU 8장 합계가 296 TFLOPS에서 10 TFLOPS가 됐습니다.</li>
+    <li>2026년 Rubin은 NVFP4 추론 성능을 최대 50 PFLOPS로 발표했습니다. 반면 Tensor Core를 쓰지 않는 FP32는 약 130 TFLOPS로 알려져 있습니다.</li>
+    <li>2회차 2.10에서 본 흐름이 계속되고 있습니다.</li>
+  </ul></div>
+  <h3>2. FP32와 FP64를 Tensor Core로 흉내 냅니다</h3>
+  <div class="prose"><ul>
+    <li>숫자를 여러 조각으로 나눠 낮은 정밀도로 곱한 뒤, 결과를 다시 합쳐 높은 정밀도의 답을 만드는 방법이 있습니다. 이걸 <button class="t" data-t="emulation">에뮬레이션</button>이라고 합니다.</li>
+    <li>cuBLAS는 BF16 Tensor Core로 FP32 행렬 곱셈을 흉내 내는 기능을 넣었습니다.</li>
+    <li>2025년 CUDA 13.0 Update 2에는 INT8 Tensor Core로 FP64 행렬 곱셈을 흉내 내는 기능이 들어왔습니다. 오자키 방식이라는 기법이고, 지금은 Blackwell에서만 됩니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>FP32는 "직접 계산하는 형식"에서 "결과가 지켜야 할 정확도의 기준"으로 바뀌고 있습니다.</b> 계산은 점점 낮은 정밀도의 Tensor Core가 맡습니다.</div>
+</section>
+
+<!-- ============ PART 2 : FP16 ============ -->
+<div class="part" id="p2">
+  <div class="pk">PART 2</div>
+  <h2>FP16 (Half Precision, 반정밀도)</h2>
+  <p>여기까지가 기준 형식 FP32였습니다. 이제 비트를 절반으로 줄인 첫 번째 형식, FP16으로 넘어가겠습니다.</p>
+</div>
+
+<section class="ch" id="s2-1">
+  <div class="ch-head"><span class="ch-num">2.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="fp16">FP16</button>은 <b>16비트로 실수를 저장하는 국제 표준 형식</b>으로, 정밀도는 괜찮지만 범위가 좁습니다.</p>
+  <div class="prose"><ul>
+    <li>정식 이름은 IEEE 754 binary16입니다. 부호 1비트, 지수 5비트, 가수 10비트입니다.</li>
+    <li>가장 큰 값은 65,504입니다. 정밀도를 다 지키며 담는 가장 작은 값은 약 0.000061입니다.</li>
+    <li>유효숫자는 약 3자리입니다.</li>
+  </ul></div>
+  <details>
+    <summary>Q. 65,504라는 숫자는 어디서 나오나요?</summary>
+    <div class="prose"><p>지수 5비트로 쓸 수 있는 가장 큰 지수는 15입니다. 가수가 모두 1이면 값은 2 빼기 2의 마이너스 10제곱, 곱하기 2의 15제곱입니다. 계산하면 65,504입니다.</p></div>
+  </details>
+</section>
+
+<section class="ch" id="s2-2">
+  <div class="ch-head"><span class="ch-num">2.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li>그래픽에서는 밝기 같은 값을 FP32만큼 정밀하게 저장할 필요가 없었습니다. 그래서 2000년대 초부터 영화 특수효과 업계와 GPU가 16비트 실수를 썼습니다.</li>
+    <li>이 형식이 2008년 IEEE 754 개정판에 표준으로 들어갔습니다.</li>
+    <li>한편 딥러닝 모델이 커지면서, FP32로는 메모리와 계산 시간을 감당하기 어려워졌습니다.</li>
+  </ul></div>
+  <div class="callout idea">
+    <span class="say">"그럼 학습도 16비트로 하되, 정확도는 지키는 방법을 찾자!"</span>
+    그래서 딥러닝에 등장한 것이 바로 <b>FP16 혼합 정밀도 학습</b>입니다.
+    <ul>
+      <li>2017년 V100의 첫 <button class="t" data-t="tensorcore">Tensor Core</button>가 FP16 곱셈을 지원했습니다.</li>
+      <li>같은 해 NVIDIA와 Baidu가 혼합 정밀도 학습 논문을 냈고, 2018년 ICLR 학회에서 발표했습니다. FP16으로도 FP32와 같은 정확도로 학습하는 방법을 보였습니다.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="ch" id="s2-3">
+  <div class="ch-head"><span class="ch-num">2.3</span><h2>구조</h2></div>
+  <div class="prose"><ul>
+    <li>지수가 5비트라서 범위가 좁습니다. 대신 가수가 10비트라서, 같은 16비트인 BF16보다 정밀합니다.</li>
+    <li>범위를 벗어나면 두 가지 일이 생깁니다. <button class="t" data-t="overflow">넘침과 사라짐</button>입니다.</li>
+  </ul></div>
+  <div class="tbl"><table>
+    <thead><tr><th>구분</th><th>언제</th><th>결과</th></tr></thead>
+    <tbody>
+      <tr><td>overflow, 넘침</td><td>65,504보다 큰 값</td><td>무한대가 됨</td></tr>
+      <tr><td>underflow, 사라짐</td><td>약 0.00000006보다 작은 값</td><td>0이 됨</td></tr>
+    </tbody>
+  </table></div>
+  <div class="prose"><ul>
+    <li>0.000061과 0.00000006 사이의 값은 비정규 수로, 정밀도를 잃으며 겨우 담습니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-4">
+  <div class="ch-head"><span class="ch-num">2.4</span><h2>작동 방식</h2></div>
+  <p class="prose">FP16 학습의 핵심은 <button class="t" data-t="lossscale">loss scaling</button>입니다.</p>
+  <div class="prose"><ol>
+    <li><b>16비트로 계산:</b> 입력과 가중치 복사본을 FP16으로 바꿔 Tensor Core로 계산합니다. 누적은 FP32입니다.</li>
+    <li><b>loss 키우기:</b> 그래디언트가 너무 작아 0이 되지 않게, loss에 큰 수를 곱한 뒤 역전파합니다. 예를 들어 65,536을 곱합니다. 이걸 loss scaling이라고 합니다.</li>
+    <li><b>되돌리기:</b> 가중치를 고치기 직전에 같은 수로 다시 나눕니다. 고치는 일은 FP32 원본에서 합니다.</li>
+    <li><b>배율 조정:</b> 계산 중 무한대가 나오면 그 단계는 건너뛰고 배율을 줄입니다. 한동안 문제가 없으면 배율을 다시 키웁니다. 이걸 동적 loss scaling이라고 합니다.</li>
+  </ol></div>
+  <pre><code>scaler = torch.amp.GradScaler()
+with torch.autocast("cuda", dtype=torch.float16):
+    loss = model(x)
+scaler.scale(loss).backward()   # loss에 배율을 곱해 역전파
+scaler.step(optimizer)          # 배율로 나눈 뒤 업데이트. 무한대가 있으면 건너뜀
+scaler.update()                 # 배율 조정</code></pre>
+  <figure class="fig"><pre class="mermaid">flowchart LR
+  L["loss"] -->|"배율 곱하기"| B["역전파&lt;br&gt;FP16"]
+  B --> Q{"무한대가&lt;br&gt;나왔나"}
+  Q -->|"예"| S["이번 단계 건너뛰고&lt;br&gt;배율 줄이기"]
+  Q -->|"아니오"| U["배율로 나누고&lt;br&gt;FP32 원본 업데이트"]</pre></figure>
+  <details>
+    <summary>Q. 곱했다가 나누면 왜 그래디언트가 사라지지 않나요?</summary>
+    <div class="prose"><p>그래디언트 0.00000001은 FP16에서 0이 됩니다. 여기에 65,536을 곱하면 약 0.00066이라 FP16에 담깁니다. FP16 구간을 다 지난 뒤, FP32에서 다시 나누면 원래 크기를 잃지 않습니다.</p></div>
+  </details>
+</section>
+
+<section class="ch" id="s2-5">
+  <div class="ch-head"><span class="ch-num">2.5</span><h2>이점</h2></div>
+  <div class="prose"><ul>
+    <li><b>메모리가 절반입니다:</b> FP32의 절반입니다. 오늘 예시의 70B 모델은 140GB입니다.</li>
+    <li><b>빠릅니다:</b> H100 SXM에서 989 TFLOPS, FP32의 약 15배입니다.</li>
+    <li><b>BF16보다 정밀합니다:</b> 가수가 3비트 더 많아서, 추론 결과가 FP32에 조금 더 가까운 경우가 있습니다.</li>
+    <li><b>오래된 GPU에서도 됩니다:</b> V100, T4처럼 BF16을 지원하지 않는 GPU에서도 Tensor Core를 씁니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-6">
+  <div class="ch-head"><span class="ch-num">2.6</span><h2>부재 시 문제</h2></div>
+  <p class="prose">FP16이 없다고 가정해 보면, 이런 문제가 생깁니다.</p>
+  <div class="prose"><ul>
+    <li>V100과 T4 세대에는 BF16도 FP8도 없어서, Tensor Core로 학습과 추론을 빠르게 할 방법이 사라집니다.</li>
+    <li>2017년부터 몇 년 동안 큰 모델의 학습 비용이 훨씬 컸을 것입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-7">
+  <div class="ch-head"><span class="ch-num">2.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>범위가 좁습니다:</b> 큰 LLM을 학습하면 값이 65,504를 넘어 무한대가 되고, loss가 갑자기 튀거나 NaN이 됩니다.</li>
+    <li><b>추가 장치가 필요합니다:</b> loss scaling과 배율 조정을 붙이고 지켜봐야 합니다.</li>
+    <li><b>모델을 옮길 때 넘칠 수 있습니다:</b> BF16으로 학습한 모델을 FP16으로 돌리면, 큰 활성값이 넘쳐 결과가 깨질 수 있습니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-8">
+  <div class="ch-head"><span class="ch-num">2.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. 동적 loss scaling</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 2.4에서 본 GradScaler입니다. 배율을 자동으로 올리고 내립니다.</li>
+    <li><b>해결하는 단점:</b> 작은 그래디언트가 0으로 사라지는 문제를 막습니다.</li>
+  </ul></div>
+  <h3>2. BF16</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 지수를 FP32와 같은 8비트로 늘린 16비트 형식입니다. PART 3에서 봅니다.</li>
+    <li><b>해결하는 단점:</b> 범위 문제를 없애서 loss scaling이 필요 없어집니다.</li>
+  </ul></div>
+  <h3>3. 민감한 연산만 FP32로</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> autocast는 softmax, 정규화, loss 계산처럼 넘치기 쉬운 연산을 자동으로 FP32로 돌립니다.</li>
+    <li><b>해결하는 단점:</b> 넘침이 잦은 곳만 골라 막습니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-9">
+  <div class="ch-head"><span class="ch-num">2.9</span><h2>대안과의 비교</h2></div>
+  <p class="prose">같은 16비트인 FP16과 BF16은 비트를 반대로 나눴습니다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>항목</th><th>FP16</th><th>BF16</th></tr></thead>
+    <tbody>
+      <tr><td>지수 · 가수</td><td>5 · 10</td><td>8 · 7</td></tr>
+      <tr><td>범위</td><td>좁음 (최대 65,504)</td><td>FP32와 같음</td></tr>
+      <tr><td>정밀도</td><td>높음</td><td>낮음</td></tr>
+      <tr><td>1에 0.001을 더하면</td><td>약 1.001로 담김</td><td>1로 반올림됨</td></tr>
+      <tr><td>loss scaling</td><td>필요</td><td>필요 없음</td></tr>
+      <tr><td>Tensor Core 지원</td><td>Volta (V100)부터</td><td>Ampere (A100)부터</td></tr>
+      <tr><td>주 용도</td><td>오래된 GPU, 일부 추론</td><td>LLM 학습 표준</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="ch" id="s2-10">
+  <div class="ch-head"><span class="ch-num">2.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. 학습은 BF16에 자리를 내줬습니다</h3>
+  <div class="prose"><ul>
+    <li>A100 이후 LLM 학습은 대부분 BF16입니다. FP16은 V100, T4 같은 오래된 GPU와 일부 추론에서 주로 씁니다.</li>
+  </ul></div>
+  <h3>2. 강화학습 파인튜닝에서 다시 주목받습니다</h3>
+  <div class="prose"><ul>
+    <li>2025년 10월 Sea AI Lab 등이 낸 논문은, 강화학습, 즉 RL로 LLM을 다듬을 때 BF16 대신 FP16을 쓰면 학습이 더 안정적이라고 보고했습니다.</li>
+    <li>RL에서는 답을 만드는 추론 엔진과 가중치를 고치는 학습 엔진이 따로 돕니다. BF16은 정밀도가 낮아서, 두 엔진의 계산 결과가 조금씩 달라지고 이 차이가 학습을 흔듭니다.</li>
+    <li>FP16은 가수가 3비트 더 많아 이 차이를 줄입니다. 범위 문제는 loss scaling으로 막습니다.</li>
+  </ul></div>
+  <h3>3. 추론은 8비트와 4비트로 내려갔습니다</h3>
+  <div class="prose"><ul>
+    <li>H100 이상에서 서빙은 FP8이 기본이고, Blackwell부터는 4비트도 씁니다. PART 4에서 봅니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>형식은 범위와 정밀도 중 무엇이 더 급한지로 고릅니다.</b> FP16은 범위가 좁지만, 정밀도가 필요한 곳에서는 여전히 선택지입니다.</div>
+</section>
+
+<!-- ============ PART 3 : BF16 ============ -->
+<div class="part" id="p3">
+  <div class="pk">PART 3</div>
+  <h2>BF16 (Brain Floating Point 16)</h2>
+  <p>여기까지가 FP16이었습니다. 이제 같은 16비트를 반대로 나눈 형식, BF16으로 넘어가겠습니다.</p>
+</div>
+
+<section class="ch" id="s3-1">
+  <div class="ch-head"><span class="ch-num">3.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="bf16">BF16</button>은 <b>FP32의 앞 16비트만 남긴 형식</b>으로, 범위는 FP32와 같고 정밀도만 낮습니다.</p>
+  <div class="prose"><ul>
+    <li>부호 1비트, 지수 8비트, 가수 7비트입니다. 이름의 B는 Brain, 즉 이 형식을 만든 Google Brain에서 왔습니다.</li>
+    <li>지수가 FP32와 같은 8비트라서 범위도 FP32와 같습니다.</li>
+    <li>유효숫자는 약 2에서 3자리입니다.</li>
+  </ul></div>
+  <details>
+    <summary>Q. 1에 0.001을 더해도 1이 된다는 게 무슨 뜻인가요?</summary>
+    <div class="prose"><p>BF16에서 1 바로 다음에 담을 수 있는 값은 약 1.0078입니다. 1.001은 1에 더 가까워서 1로 반올림됩니다. FP16은 1 다음 값이 약 1.00098이라 1.001에 가까운 값을 담습니다. 맨 위 그림에서 1.001을 골라 보면 확인할 수 있습니다.</p></div>
+  </details>
+</section>
+
+<section class="ch" id="s3-2">
+  <div class="ch-head"><span class="ch-num">3.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li>FP16은 범위가 좁아서 값이 넘치거나 사라졌고, loss scaling을 붙이고 맞추는 일이 번거로웠습니다.</li>
+    <li>신경망은 값의 정확한 자릿수보다 크기 범위에 더 민감하다는 관찰이 있었습니다.</li>
+  </ul></div>
+  <div class="callout idea">
+    <span class="say">"그럼 범위는 FP32 그대로 두고, 정밀도만 줄이자!"</span>
+    그래서 Google Brain이 만든 것이 바로 <b>BF16</b>입니다.
+    <ul>
+      <li>Google은 2017년 <button class="t" data-t="tpu">TPU</button> v2부터 BF16을 썼습니다.</li>
+      <li>2020년 NVIDIA A100과 Intel Xeon이 지원하면서 널리 퍼졌습니다.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="ch" id="s3-3">
+  <div class="ch-head"><span class="ch-num">3.3</span><h2>구조</h2></div>
+  <div class="prose"><ul>
+    <li>BF16은 FP32 32비트 중 앞 16비트와 똑같습니다.</li>
+    <li>그래서 FP32를 BF16으로 바꿀 때는 뒤 16비트를 반올림해 버리면 됩니다. 되돌릴 때는 뒤에 0을 붙이면 됩니다.</li>
+  </ul></div>
+  <figure class="fig"><pre class="mermaid">flowchart TB
+  A["FP32&lt;br&gt;부호 1 · 지수 8 · 가수 23"] -->|"뒤 16비트를 반올림해 버림"| B["BF16&lt;br&gt;부호 1 · 지수 8 · 가수 7"]
+  B -->|"뒤에 0을 16개 붙임"| A</pre></figure>
+</section>
+
+<section class="ch" id="s3-4">
+  <div class="ch-head"><span class="ch-num">3.4</span><h2>작동 방식</h2></div>
+  <div class="prose"><ol>
+    <li><b>바꾸기:</b> FP32 값의 뒤 16비트를 반올림해 버리면 BF16입니다.</li>
+    <li><b>계산:</b> Tensor Core가 BF16으로 곱하고, 합계는 FP32로 쌓습니다.</li>
+    <li><b>원본 유지:</b> 가중치 원본과 옵티마이저 상태는 FP32로 둡니다. 1.4에서 본 혼합 정밀도 그대로입니다.</li>
+    <li><b>loss scaling 없음:</b> 범위가 넓어서 그래디언트가 0으로 사라지는 일이 드뭅니다. GradScaler를 쓰지 않습니다.</li>
+  </ol></div>
+  <pre><code>with torch.autocast("cuda", dtype=torch.bfloat16):  # GradScaler가 필요 없음
+    loss = model(x)
+loss.backward()</code></pre>
+</section>
+
+<section class="ch" id="s3-5">
+  <div class="ch-head"><span class="ch-num">3.5</span><h2>이점</h2></div>
+  <div class="prose"><ul>
+    <li><b>loss scaling이 필요 없습니다:</b> 코드가 단순하고, 큰 모델 학습이 안정적입니다.</li>
+    <li><b>FP16과 같은 이점이 있습니다:</b> 메모리는 FP32의 절반이고, H100 SXM에서 989 TFLOPS입니다.</li>
+    <li><b>바꾸기 쉽습니다:</b> FP32와 오갈 때 비트를 자르고 붙이면 됩니다.</li>
+    <li><b>사실상 표준입니다:</b> Llama, Qwen, Mistral 같은 오픈 LLM 대부분이 BF16으로 학습하고 BF16 가중치로 배포합니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-6">
+  <div class="ch-head"><span class="ch-num">3.6</span><h2>부재 시 문제</h2></div>
+  <p class="prose">BF16이 없다고 가정해 보면, 이런 문제가 생깁니다.</p>
+  <div class="prose"><ul>
+    <li>큰 모델을 학습할 때마다 FP16의 loss scaling을 맞춰야 합니다.</li>
+    <li>학습 중 NaN으로 발산하면 저장해 둔 지점부터 다시 돌려야 해서, 시간과 비용이 낭비됩니다. 저장 지점, 즉 체크포인트는 19회차에서 다룹니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-7">
+  <div class="ch-head"><span class="ch-num">3.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>정밀도가 낮습니다:</b> 1에 0.001을 더해도 1입니다. 가중치를 BF16으로만 들고 있으면 작은 업데이트가 사라집니다.</li>
+    <li><b>오래된 GPU는 안 됩니다:</b> V100, T4는 BF16 Tensor Core가 없습니다.</li>
+    <li><b>결과가 조금 다를 수 있습니다:</b> FP16이나 FP32로 돌린 결과와 마지막 자리가 다르게 나올 수 있습니다. 2.10에서 본 RL 문제가 여기서 나옵니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-8">
+  <div class="ch-head"><span class="ch-num">3.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. FP32 원본 가중치</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 계산은 BF16으로 하고, 업데이트는 FP32 원본에 쌓습니다.</li>
+    <li><b>해결하는 단점:</b> 작은 업데이트가 반올림에 사라지는 문제를 막습니다.</li>
+  </ul></div>
+  <h3>2. 확률적 반올림과 Kahan 합산</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> <button class="t" data-t="stochround">확률적 반올림</button>은 늘 가까운 쪽으로 반올림하지 않고, 거리에 비례한 확률로 위나 아래로 반올림합니다. Kahan 합산은 반올림으로 버려진 나머지를 따로 모아 다음 덧셈에 더합니다.</li>
+    <li><b>해결하는 단점:</b> FP32 원본 없이 BF16만으로 학습할 때 작은 업데이트를 살립니다.</li>
+  </ul></div>
+  <h3>3. FP8 학습</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 계산을 8비트 실수로 더 낮춥니다. PART 4에서 봅니다.</li>
+    <li><b>해결하는 단점:</b> 더 빠른 학습이 필요할 때 BF16의 속도 한계를 넘습니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-9">
+  <div class="ch-head"><span class="ch-num">3.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl wide"><table>
+    <thead><tr><th>항목</th><th>FP32</th><th>FP16</th><th>BF16</th><th>FP8</th></tr></thead>
+    <tbody>
+      <tr><td>범위</td><td>넓음</td><td>좁음</td><td>넓음</td><td>좁음 (배율 필요)</td></tr>
+      <tr><td>정밀도</td><td>매우 높음</td><td>중간</td><td>낮음</td><td>매우 낮음</td></tr>
+      <tr><td>학습 안정성</td><td>가장 높음</td><td>loss scaling 필요</td><td>높음</td><td>세밀한 배율 필요</td></tr>
+      <tr><td>H100 SXM 속도</td><td class="num">67 TFLOPS</td><td class="num">989 TFLOPS</td><td class="num">989 TFLOPS</td><td class="num">1,979 TFLOPS</td></tr>
+      <tr><td>필요한 GPU</td><td>모든 GPU</td><td>Volta (V100)부터</td><td>Ampere (A100)부터</td><td>Ada · Hopper (H100)부터</td></tr>
+    </tbody>
+  </table></div>
+  <details>
+    <summary>Q. FP16과 BF16 중 무엇을 써야 하나요?</summary>
+    <div class="prose"><p>A100 이상에서 학습하면 BF16을 씁니다. V100이나 T4 같은 오래된 GPU라면 FP16에 GradScaler를 붙입니다. 추론은 모델이 학습된 형식을 따르는 것이 안전합니다. BF16으로 학습한 모델을 FP16으로 돌리면 값이 넘칠 수 있습니다.</p></div>
+  </details>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>딥러닝 학습에서는 정밀도보다 범위가 먼저입니다.</b> BF16이 표준이 된 이유입니다.</div>
+</section>
+
+<section class="ch" id="s3-10">
+  <div class="ch-head"><span class="ch-num">3.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. 학습의 기본값은 여전히 BF16입니다</h3>
+  <div class="prose"><ul>
+    <li>오픈 모델의 학습과 배포 형식은 BF16이 기본입니다. 가장 큰 모델들부터 그 아래로 내려가고 있습니다.</li>
+  </ul></div>
+  <h3>2. 큰 모델 학습은 FP8로 내려갑니다</h3>
+  <div class="prose"><ul>
+    <li>2024년 12월 DeepSeek-V3는 FP8 혼합 정밀도로 학습했습니다. 큰 모델을 FP8로 학습해 비용을 줄인 사례로 주목받았습니다.</li>
+    <li>2025년 8월 DeepSeek-V3.1은 FP8 배율을 UE8M0라는 형식으로 바꿔 학습했습니다. 중국산 차세대 칩에 맞추기 위해서라고 밝혔습니다. PART 4에서 이어서 봅니다.</li>
+  </ul></div>
+  <h3>3. 4비트로 학습하는 연구도 나왔습니다</h3>
+  <div class="prose"><ul>
+    <li>2025년 9월 NVIDIA는 12B 모델을 4비트 형식인 NVFP4로 10조 토큰 학습한 논문을 냈습니다.</li>
+    <li>MMLU-Pro 점수가 FP8로 학습한 모델과 거의 같았다고 보고했습니다. 62.58 대 62.62입니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>BF16은 학습의 기준선이 됐고, 최전선은 그 아래 8비트와 4비트로 내려가고 있습니다.</b></div>
+</section>
+
+<!-- ============ PART 4 : FP8 ============ -->
+<div class="part" id="p4">
+  <div class="pk">PART 4</div>
+  <h2>FP8 (8-bit Floating Point)</h2>
+  <p>여기까지 16비트 형식을 봤습니다. 이제 비트를 다시 절반으로 줄인 8비트 실수, FP8로 넘어가겠습니다. 비트가 너무 적어서, 오늘 처음으로 배율이라는 장치가 필요해집니다.</p>
+</div>
+
+<section class="ch" id="s4-1">
+  <div class="ch-head"><span class="ch-num">4.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="fp8">FP8</button>은 <b>8비트로 실수를 저장하는 형식</b>입니다. 배율, 영어로 scale과 함께 써야 하지만, BF16보다 두 배 빠르고 메모리는 절반입니다.</p>
+  <div class="prose"><ul>
+    <li>용도에 따라 두 가지를 나눠 씁니다.</li>
+    <li><b>E4M3:</b> 지수 4비트, 가수 3비트입니다. 정밀도를 우선하고, 최대 448입니다. 가중치와 활성값에 씁니다.</li>
+    <li><b>E5M2:</b> 지수 5비트, 가수 2비트입니다. 범위를 우선하고, 최대 57,344입니다. 역전파의 그래디언트에 씁니다.</li>
+  </ul></div>
+  <details>
+    <summary>Q. 왜 형식이 두 개인가요?</summary>
+    <div class="prose"><p>앞으로 계산하는 가중치와 활성값은 값의 범위가 비교적 일정해서 정밀도가 중요합니다. 그래서 E4M3를 씁니다. 거꾸로 계산하는 그래디언트는 값의 범위가 아주 넓어서 범위가 중요합니다. 그래서 E5M2를 씁니다.</p></div>
+  </details>
+</section>
+
+<section class="ch" id="s4-2">
+  <div class="ch-head"><span class="ch-num">4.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li>모델 크기가 폭증하면서 메모리 용량과 대역폭이 한계에 닿았습니다.</li>
+    <li>INT8은 추론에는 좋았지만, 그래디언트처럼 범위가 넓은 값에는 맞지 않아 학습에 쓰기 어려웠습니다.</li>
+  </ul></div>
+  <div class="callout idea">
+    <span class="say">"그럼 학습까지 할 수 있는 8비트 실수 형식을 만들자!"</span>
+    그래서 2022년 등장한 것이 바로 <b>FP8</b>입니다.
+    <ul>
+      <li>2022년 9월 NVIDIA, Arm, Intel이 함께 FP8 형식을 제안했습니다.</li>
+      <li>같은 해 H100이 FP8 Tensor Core와 <button class="t" data-t="te">Transformer Engine</button>을 싣고 나왔습니다.</li>
+      <li>2023년 6월 OCP, 즉 Open Compute Project가 OFP8이라는 이름으로 표준 문서를 냈습니다.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="ch" id="s4-3">
+  <div class="ch-head"><span class="ch-num">4.3</span><h2>구조</h2></div>
+  <h3>1. FP8 값과 배율</h3>
+  <div class="prose"><ul>
+    <li>FP8 값은 혼자 쓰지 않고, <button class="t" data-t="scale">배율</button> 하나와 짝을 이룹니다. 실제 값은 FP8 값 곱하기 배율입니다.</li>
+    <li>E4M3의 최대는 448이라서, 배율로 실제 값의 범위를 FP8 범위 안으로 옮겨 담습니다.</li>
+  </ul></div>
+  <h3>2. 배율을 얼마나 잘게 두나</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>방식</th><th>배율 하나가 맡는 범위</th><th>대표 사례</th></tr></thead>
+    <tbody>
+      <tr><td>텐서 단위</td><td>텐서 전체</td><td>Hopper의 Transformer Engine</td></tr>
+      <tr><td>블록 단위</td><td>값 128개 묶음, 또는 128×128 블록</td><td>DeepSeek-V3</td></tr>
+      <tr><td>MXFP8</td><td>값 32개 묶음</td><td>Blackwell</td></tr>
+    </tbody>
+  </table></div>
+  <div class="prose"><ul>
+    <li>잘게 나눌수록 큰 값 하나의 영향이 그 묶음 안에만 머뭅니다. 대신 배율을 저장할 자리가 늘어납니다.</li>
+  </ul></div>
+  <details>
+    <summary>Q. 배율이 꼭 필요한 이유는 무엇인가요?</summary>
+    <div class="prose"><p>E4M3는 448까지만 담습니다. 실제 값이 1,000까지 퍼져 있으면 넘치고, 0.001 근처에 몰려 있으면 0으로 뭉개집니다. 배율로 값의 분포를 FP8이 잘 담는 구간으로 옮겨야 넘침과 정밀도 손실을 함께 막을 수 있습니다.</p></div>
+  </details>
+</section>
+
+<section class="ch" id="s4-4">
+  <div class="ch-head"><span class="ch-num">4.4</span><h2>작동 방식</h2></div>
+  <div class="prose"><ol>
+    <li><b>최댓값 재기:</b> 텐서에서 가장 큰 절댓값, 즉 amax를 잽니다.</li>
+    <li><b>배율 정하기:</b> amax가 FP8의 최대인 448에 맞도록 배율을 계산합니다.</li>
+    <li><b>바꿔서 곱하기:</b> 값을 배율로 나눠 FP8로 바꾸고, FP8 Tensor Core로 곱합니다. 합계는 FP32로 쌓습니다.</li>
+    <li><b>되돌리기:</b> 결과에 배율을 다시 곱해 BF16이나 FP32로 내보냅니다.</li>
+    <li><b>민감한 곳은 그대로:</b> 임베딩, 정규화, softmax, 마지막 출력층은 BF16이나 FP32로 둡니다.</li>
+  </ol></div>
+  <figure class="fig"><pre class="mermaid">flowchart LR
+  T["BF16 텐서"] -->|"① 최댓값 재기"| A["amax"]
+  A -->|"② 448에 맞게"| S["배율"]
+  T -->|"③ 배율로 나눠 FP8로"| F["FP8 Tensor Core&lt;br&gt;합계는 FP32"]
+  S --> F
+  F -->|"④ 배율 다시 곱하기"| O["BF16 결과"]</pre></figure>
+  <figure class="fig">
+    <div class="fig-title">배율 계산기: 텐서 단위와 블록 단위</div>
+    <div class="seg" id="s-out"></div>
+    <div class="seg" id="s-mode"></div>
+    <div class="split">
+      <div class="scroll-x"><svg id="sSvg" viewBox="0 0 420 220" width="100%" role="img" aria-label="값 16개를 FP8 E4M3로 저장했을 때 원래 값과 저장된 값"></svg></div>
+      <div class="panel" id="sPanel" aria-live="polite"></div>
+    </div>
+    <div class="legend"><span><i class="sw" style="background:var(--idle)"></i>원래 값</span><span><i class="sw" style="background:var(--accent)"></i>FP8로 저장된 값</span><span><i class="sw" style="background:var(--off)"></i>0으로 뭉개진 값</span></div>
+    <figcaption>예시입니다. 값 16개 중 하나를 큰 값으로 바꿔 봅니다. 블록 단위는 8개씩 두 묶음에 배율을 따로 둡니다. 큰 값이 있으면 막대 높이는 큰 값을 빼고 그립니다.</figcaption>
+  </figure>
+  <p class="prose">서빙 도구에서는 옵션 하나로 켭니다.</p>
+  <pre><code>vllm serve &lt;모델&gt; --quantization fp8 --kv-cache-dtype fp8</code></pre>
+</section>
+
+<section class="ch" id="s4-5">
+  <div class="ch-head"><span class="ch-num">4.5</span><h2>이점</h2></div>
+  <div class="prose"><ul>
+    <li><b>두 배 빠릅니다:</b> H100 SXM에서 BF16은 989 TFLOPS, FP8은 1,979 TFLOPS입니다.</li>
+    <li><b>메모리가 절반입니다:</b> 오늘 예시의 70B 모델은 70GB로, H100 한 장에 간신히 올라갑니다.</li>
+    <li><b>추론 정확도가 거의 같습니다:</b> 그래서 H100 이상에서 LLM을 서빙할 때 기본 선택지가 됐습니다.</li>
+    <li><b>KV 캐시도 줄입니다:</b> KV 캐시를 FP8로 저장하면 더 긴 문맥과 더 많은 동시 사용자를 받습니다. 20회차에서 다룹니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s4-6">
+  <div class="ch-head"><span class="ch-num">4.6</span><h2>부재 시 문제</h2></div>
+  <p class="prose">FP8이 없다고 가정해 보면, 이런 문제가 생깁니다.</p>
+  <div class="prose"><ul>
+    <li>같은 모델을 서빙하는 데 GPU가 약 두 배 필요해서 비용이 늘어납니다.</li>
+    <li>큰 모델을 학습하는 비용과 시간도 늘어납니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s4-7">
+  <div class="ch-head"><span class="ch-num">4.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>배율 관리가 어렵습니다:</b> 배율을 잘못 잡으면 값이 넘치거나 정밀도를 잃습니다.</li>
+    <li><b>큰 값 하나에 약합니다:</b> 이런 값을 <button class="t" data-t="outlier">outlier</button>, 우리말로 이상값이라고 합니다. 배율이 큰 값에 맞춰지면 나머지 작은 값들이 0 근처로 뭉개집니다. 블록 단위 배율이 필요한 이유입니다.</li>
+    <li><b>GPU를 탑니다:</b> Ada, 즉 RTX 40 계열과 Hopper부터 됩니다. A100에는 FP8 Tensor Core가 없습니다.</li>
+    <li><b>바꾸는 비용이 있습니다:</b> 모든 연산을 FP8로 할 수 없어서, 형식을 오가는 시간이 듭니다.</li>
+  </ul></div>
+  <details>
+    <summary>Q. A100에서도 FP8을 쓸 수 있나요?</summary>
+    <div class="prose"><p>FP8로 계산하는 가속은 안 됩니다. 가중치만 FP8로 저장해 메모리를 아끼고, 계산할 때 BF16으로 풀어 쓰는 방식은 됩니다. 이걸 weight-only라고 하는데, 속도 이점은 크지 않습니다.</p></div>
+  </details>
+</section>
+
+<section class="ch" id="s4-8">
+  <div class="ch-head"><span class="ch-num">4.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. Transformer Engine</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 층마다 배율을 계산하고 형식을 고르는 일을 자동으로 해 주는 NVIDIA 라이브러리입니다. 2회차 3.8에서 봤습니다.</li>
+    <li><b>해결하는 단점:</b> 배율을 손으로 관리하는 어려움을 줄입니다.</li>
+  </ul></div>
+  <h3>2. 마이크로스케일링, MX 형식</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 값 32개 묶음마다 배율을 따로 둡니다. <button class="t" data-t="mx">MXFP8, MXFP4</button>가 있고, 2023년 9월 OCP 표준이 됐습니다.</li>
+    <li><b>해결하는 단점:</b> 이상값의 영향을 그 묶음 안에 가둡니다.</li>
+  </ul></div>
+  <h3>3. 더 작게는 FP4, 오래된 GPU에서는 INT8</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> Blackwell부터는 4비트인 <button class="t" data-t="nvfp4">NVFP4</button>와 MXFP4를 Tensor Core로 바로 계산합니다. FP8이 없는 A100 같은 GPU에서는 PART 5의 INT8을 씁니다.</li>
+    <li><b>해결하는 단점:</b> 메모리를 더 줄이거나, GPU를 타는 문제를 피합니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s4-9">
+  <div class="ch-head"><span class="ch-num">4.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl wide"><table>
+    <thead><tr><th>항목</th><th>BF16</th><th>FP8</th><th>INT8</th><th>NVFP4</th></tr></thead>
+    <tbody>
+      <tr><td>학습</td><td>표준</td><td>가능, 큰 모델 사례 다수</td><td>어려움</td><td>연구와 초기 적용</td></tr>
+      <tr><td>추론 정확도</td><td>기준</td><td>거의 같음</td><td>캘리브레이션에 따라 다름</td><td>조금 떨어짐 (1% 안팎 보고)</td></tr>
+      <tr><td>메모리 (BF16 대비)</td><td class="num">1배</td><td class="num">0.5배</td><td class="num">0.5배</td><td class="num">약 0.28배</td></tr>
+      <tr><td>필요한 GPU</td><td>Ampere부터</td><td>Ada · Hopper부터</td><td>Turing부터</td><td>Blackwell부터</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="ch" id="s4-10">
+  <div class="ch-head"><span class="ch-num">4.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. 블록 단위 배율이 표준이 됐습니다</h3>
+  <div class="prose"><ul>
+    <li>DeepSeek-V3는 활성값은 값 128개마다, 가중치는 128×128 블록마다 배율을 두고, 모든 곳에 E4M3를 썼습니다. 누적 중간값은 FP32로 올려 정확도를 지켰습니다.</li>
+    <li>3.10에서 본 DeepSeek-V3.1의 UE8M0는 배율을 2의 거듭제곱으로만 담는 8비트 형식입니다. MX 형식의 배율과 같은 방식입니다.</li>
+    <li>OCP는 2026년 1월 OFP8 표준의 개정판 1.1을 냈습니다.</li>
+  </ul></div>
+  <h3>2. 다음 단계는 4비트입니다</h3>
+  <div class="prose"><ul>
+    <li>NVFP4는 값 16개마다 FP8 배율을 두고, 텐서 전체에 FP32 배율을 하나 더 둡니다. 값 하나에 약 4.5비트를 씁니다.</li>
+    <li>NVIDIA가 공개한 DeepSeek-R1 NVFP4 모델은 GPQA 점수가 81에서 80.0으로, 거의 그대로였습니다.</li>
+    <li>2025년 8월 OpenAI의 gpt-oss는 MoE 가중치를 MXFP4로 배포했습니다. 120B 모델이 80GB GPU 한 장에 올라갑니다.</li>
+  </ul></div>
+  <h3>3. GPU도 4비트에 무게를 둡니다</h3>
+  <div class="prose"><ul>
+    <li>B300은 B200보다 FP4 성능을 1.5배로 올렸고, FP8 성능은 그대로 뒀습니다.</li>
+    <li>Rubin은 NVFP4 추론 성능을 최대 50 PFLOPS로 발표했습니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>FP8은 이제 서빙의 기본값이고, 새 GPU의 숫자 경쟁은 4비트로 옮겨 갔습니다.</b></div>
+</section>
+
+<!-- ============ PART 5 : INT8 ============ -->
+<div class="part" id="p5">
+  <div class="pk">PART 5</div>
+  <h2>INT8 (8-bit Integer)</h2>
+  <p>여기까지가 실수 형식이었습니다. 마지막으로 소수점이 없는 정수 형식, INT8을 보겠습니다. 실수를 정수로 바꿔 담는 일을 양자화, 영어로 Quantization이라고 합니다.</p>
+</div>
+
+<section class="ch" id="s5-1">
+  <div class="ch-head"><span class="ch-num">5.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="int8">INT8</button>은 <b>실수를 −128부터 127까지, 정수 256단계로 바꿔 저장하는 형식</b>입니다.</p>
+  <div class="prose"><ul>
+    <li>배율 s와 영점 z로 바꿉니다. 실수를 배율로 나눠 반올림하고 영점을 더하면 정수가 됩니다.</li>
+    <li>되돌릴 때는 정수에서 영점을 빼고 배율을 곱합니다.</li>
+    <li>주로 추론에 씁니다. 학습에는 쓰지 않습니다.</li>
+  </ul></div>
+  <pre><code>양자화:   q = round(x / s) + z
+역양자화: x ≈ s × (q − z)</code></pre>
+  <details>
+    <summary>Q. INT8과 FP8은 둘 다 8비트인데 무엇이 다른가요?</summary>
+    <div class="prose"><p>INT8은 눈금 간격이 균일합니다. FP8은 지수가 있어서 0 근처는 촘촘하고 큰 값은 성깁니다. 신경망 값은 대부분 0 근처에 몰려 있고 가끔 큰 값이 섞여서, FP8이 더 잘 맞는 경우가 많습니다. 대신 INT8은 지원하는 하드웨어가 훨씬 넓습니다.</p></div>
+  </details>
+</section>
+
+<section class="ch" id="s5-2">
+  <div class="ch-head"><span class="ch-num">5.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li>휴대폰, 자동차 같은 에지 기기와 대규모 서빙에서는 메모리와 전력을 줄여야 했습니다.</li>
+    <li>정수 회로는 부동소수점 회로보다 단순하고 전력도 적게 씁니다.</li>
+  </ul></div>
+  <div class="callout idea">
+    <span class="say">"그럼 학습이 끝난 모델은 정수로 바꿔서 돌리자!"</span>
+    그래서 추론용으로 자리 잡은 것이 바로 <b><button class="t" data-t="quant">INT8 양자화</button></b>입니다.
+    <ul>
+      <li>2016년 공개된 Google의 첫 TPU가 8비트 정수로 추론했습니다.</li>
+      <li>2017년 NVIDIA <button class="t" data-t="tensorrt">TensorRT</button>가 INT8 캘리브레이션을 넣었고, 2018년 Turing이 INT8 Tensor Core를 실었습니다.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="ch" id="s5-3">
+  <div class="ch-head"><span class="ch-num">5.3</span><h2>구조</h2></div>
+  <div class="tbl wide"><table>
+    <thead><tr><th>구분</th><th>선택지</th><th>뜻</th></tr></thead>
+    <tbody>
+      <tr><td>영점</td><td>대칭 · 비대칭</td><td>영점을 0에 두느냐, 따로 두느냐</td></tr>
+      <tr><td>배율 단위</td><td>텐서 · 채널 · 그룹</td><td>배율 하나가 맡는 범위. 잘게 나눌수록 정확함</td></tr>
+      <tr><td>적용 대상</td><td>W8A8 · W8A16</td><td>가중치와 활성값 모두 INT8, 또는 가중치만 INT8</td></tr>
+      <tr><td>방법</td><td>PTQ · QAT</td><td>학습이 끝난 뒤 바꾸기, 또는 양자화를 고려해 학습하기</td></tr>
+    </tbody>
+  </table></div>
+  <div class="prose"><ul>
+    <li><button class="t" data-t="ptq">PTQ</button>는 Post-Training Quantization, QAT는 Quantization-Aware Training의 줄임말입니다. PTQ가 간단하고, QAT가 더 정확합니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s5-4">
+  <div class="ch-head"><span class="ch-num">5.4</span><h2>작동 방식</h2></div>
+  <div class="prose"><ol>
+    <li><b>캘리브레이션:</b> 샘플 데이터를 넣어 텐서마다 값의 범위를 재고, 배율을 정합니다. 이 과정을 <button class="t" data-t="calib">캘리브레이션</button>이라고 합니다.</li>
+    <li><b>바꾸기:</b> 가중치와 활성값을 INT8로 바꿉니다.</li>
+    <li><b>곱하기:</b> INT8 곱하기 INT8로 계산하고, 합계는 INT32로 쌓아 넘치지 않게 합니다.</li>
+    <li><b>되돌리기:</b> 결과에 배율을 곱해 FP16이나 FP32로 바꿉니다.</li>
+  </ol></div>
+  <figure class="fig"><pre class="mermaid">flowchart LR
+  D["샘플 데이터"] -->|"① 범위 재기"| S["배율"]
+  W["FP16 값"] -->|"② 나누고 반올림"| I["INT8 값"]
+  S --> I
+  I -->|"③ 곱하기, 합계는 INT32"| R["INT32 결과"]
+  R -->|"④ 배율 곱하기"| O["FP16 결과"]</pre></figure>
+  <p class="prose">LLM에는 이상값 때문에 전용 기법이 생겼습니다.</p>
+  <div class="prose"><ul>
+    <li><b>LLM.int8():</b> 이상값이 있는 열만 FP16으로 따로 계산합니다. 2022년에 나왔습니다.</li>
+    <li><b><button class="t" data-t="smoothquant">SmoothQuant</button>:</b> 활성값의 이상값을 가중치 쪽으로 옮겨서, 양쪽 모두 INT8로 바꿉니다. 같은 해에 나왔습니다.</li>
+  </ul></div>
+  <details>
+    <summary>Q. 양자화하면 정확도가 얼마나 떨어지나요?</summary>
+    <div class="prose"><p>모델과 방법에 따라 다르지만, 큰 LLM에서는 FP8, INT8, INT4 순으로 손실이 커지는 경향입니다. 서비스에 쓰기 전에는 반드시 실제 업무 데이터로 평가합니다.</p></div>
+  </details>
+</section>
+
+<section class="ch" id="s5-5">
+  <div class="ch-head"><span class="ch-num">5.5</span><h2>이점</h2></div>
+  <div class="prose"><ul>
+    <li><b>메모리를 줄입니다:</b> FP32의 4분의 1, FP16의 절반입니다.</li>
+    <li><b>전력을 덜 씁니다:</b> 정수 회로가 단순해서, 에지 기기에 특히 유리합니다.</li>
+    <li><b>어디서나 됩니다:</b> CPU, <button class="t" data-t="npu">NPU</button>, 오래된 GPU까지 지원하는 하드웨어가 가장 넓습니다.</li>
+    <li><b>A100에서 두 배입니다:</b> A100은 FP16이 312 TFLOPS, INT8이 624 TOPS입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s5-6">
+  <div class="ch-head"><span class="ch-num">5.6</span><h2>부재 시 문제</h2></div>
+  <p class="prose">INT8 양자화가 없다고 가정해 보면, 이런 문제가 생깁니다.</p>
+  <div class="prose"><ul>
+    <li>휴대폰, 차량, CCTV 같은 에지 기기에 AI 모델을 올리기 어렵습니다.</li>
+    <li>A100, T4처럼 FP8이 없는 GPU에서 서빙 효율을 높일 수단이 모자랍니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s5-7">
+  <div class="ch-head"><span class="ch-num">5.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>간격이 균일합니다:</b> 이상값 하나 때문에 배율이 커지면, 나머지 값들이 몇 칸 안에 뭉칩니다. LLM의 활성값이 대표적입니다.</li>
+    <li><b>캘리브레이션이 필요합니다:</b> 샘플 데이터가 실제와 다르면 정확도가 떨어집니다.</li>
+    <li><b>학습에는 맞지 않습니다:</b> 그래디언트는 범위가 너무 넓습니다.</li>
+    <li><b>최신 GPU에서는 줄어듭니다:</b> 5.10에서 봅니다.</li>
+  </ul></div>
+  <details>
+    <summary>Q. 이상값 하나가 얼마나 망치나요?</summary>
+    <div class="prose"><p>값이 대부분 마이너스 1에서 1 사이인데 100이 하나 섞였다고 해 보겠습니다. 100을 127에 맞추면 배율은 약 0.79입니다. 그러면 마이너스 1에서 1 사이의 값은 정수 마이너스 1, 0, 1, 세 칸에 모두 뭉칩니다. 예시입니다.</p></div>
+  </details>
+  <figure class="fig">
+    <div class="fig-title">이상값과 INT8 눈금</div>
+    <div class="seg" id="q-out"></div>
+    <div class="split">
+      <div class="scroll-x"><svg id="qSvg" viewBox="0 0 420 150" width="100%" role="img" aria-label="INT8 눈금 256칸 중 보통 값들이 실제로 쓰는 칸"></svg></div>
+      <div class="panel" id="qPanel" aria-live="polite"></div>
+    </div>
+    <div class="legend"><span><i class="sw" style="background:var(--accent)"></i>보통 값이 쓰는 칸</span><span><i class="sw" style="background:var(--tensor)"></i>이상값이 쓰는 칸</span><span><i class="sw" style="background:var(--idle)"></i>비어 있는 칸</span></div>
+    <figcaption>예시입니다. 마이너스 1에서 1 사이의 값 200개에 큰 값 하나를 섞고, 가장 큰 절댓값을 127에 맞춰 배율을 정합니다.</figcaption>
+  </figure>
+</section>
+
+<section class="ch" id="s5-8">
+  <div class="ch-head"><span class="ch-num">5.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. FP8</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 지수가 있는 8비트 실수입니다. PART 4에서 봤습니다.</li>
+    <li><b>해결하는 단점:</b> 넓은 분포와 이상값에 강하고, 캘리브레이션 부담이 적습니다. Hopper부터 됩니다.</li>
+  </ul></div>
+  <h3>2. 세밀한 배율과 SmoothQuant, QAT</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 채널이나 그룹마다 배율을 두고, 이상값을 옮기거나, 양자화를 고려해 학습합니다.</li>
+    <li><b>해결하는 단점:</b> 이상값 때문에 눈금이 낭비되는 문제를 줄입니다.</li>
+  </ul></div>
+  <h3>3. INT4 가중치 양자화</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 가중치만 4비트 정수로 줄입니다. <button class="t" data-t="awq">AWQ, GPTQ, GGUF</button>가 대표적이고, 21회차에서 다룹니다.</li>
+    <li><b>해결하는 단점:</b> 메모리를 더 줄입니다. 오늘 예시의 70B 모델은 약 35GB가 됩니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s5-9">
+  <div class="ch-head"><span class="ch-num">5.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl wide"><table>
+    <thead><tr><th>항목</th><th>INT8</th><th>FP8</th><th>INT4 (AWQ · GPTQ)</th></tr></thead>
+    <tbody>
+      <tr><td>값 간격</td><td>균일</td><td>0 근처는 촘촘, 큰 값은 성김</td><td>균일 (16단계)</td></tr>
+      <tr><td>이상값 대응</td><td>약함</td><td>강함</td><td>매우 약함 (그룹 배율 필수)</td></tr>
+      <tr><td>캘리브레이션</td><td>필요</td><td>간단 (배율만)</td><td>필요</td></tr>
+      <tr><td>지원 범위</td><td>매우 넓음 (CPU · NPU · 오래된 GPU)</td><td>Ada · Hopper부터</td><td>넓음 (주로 가중치만)</td></tr>
+      <tr><td>정확도 (70B 비교 보고)</td><td>FP16 대비 약 0.7점 이내</td><td>약 0.4점 이내</td><td>약 1.6에서 1.9점 이내</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>같은 8비트라도 INT8은 간격이 균일하고, FP8은 0 근처가 촘촘합니다.</b> 신경망 값은 대부분 0 근처에 몰려 있어서 FP8이 더 잘 맞는 경우가 많습니다.</div>
+</section>
+
+<section class="ch" id="s5-10">
+  <div class="ch-head"><span class="ch-num">5.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. 최신 데이터센터 GPU는 INT8을 줄였습니다</h3>
+  <div class="prose"><ul>
+    <li>B300은 B200보다 INT8 성능을 크게 줄였습니다. NVIDIA HGX 자료 기준으로 GPU 8장 합계가 희소성 포함 72 POPS에서 3 POPS가 됐습니다.</li>
+    <li>같은 B300에서 FP8 성능은 그대로입니다. 칩 면적을 FP8과 FP4에 몰아준 셈입니다.</li>
+  </ul></div>
+  <h3>2. 서빙 도구도 FP8로 넘어갑니다</h3>
+  <div class="prose"><ul>
+    <li>vLLM 문서는 INT8 <button class="t" data-t="w8a8">W8A8</button>을 Turing부터 Hopper까지만 지원하고, Blackwell에서는 FP8을 쓰라고 안내합니다.</li>
+  </ul></div>
+  <h3>3. FP8이 없는 하드웨어에서는 여전히 주력입니다</h3>
+  <div class="prose"><ul>
+    <li>A100, T4 같은 Ampere와 Turing GPU에는 FP8 Tensor Core가 없습니다. 그래서 INT8 W8A8과 4비트 가중치가 가장 좋은 선택지입니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>INT8은 데이터센터 최전선에서는 FP8과 FP4에 자리를 내주고, FP8이 없는 하드웨어의 주력으로 남고 있습니다.</b></div>
+</section>
+
+<section class="ch" id="sum">
+  <div class="ch-head"><span class="ch-num">=</span><h2>정리: 오늘 예시를 다섯 형식으로 다시 보면</h2></div>
+  <div class="tbl wide"><table>
+    <thead><tr><th>형식</th><th>70B 가중치</th><th>주로 쓰는 곳</th><th>필요한 GPU</th></tr></thead>
+    <tbody>
+      <tr><td>FP32</td><td class="num">280GB</td><td>원본 가중치, 누적 합, 정확도 기준</td><td>모든 GPU</td></tr>
+      <tr><td>FP16</td><td class="num">140GB</td><td>오래된 GPU의 학습과 추론, RL 파인튜닝</td><td>Volta (V100)부터</td></tr>
+      <tr><td>BF16</td><td class="num">140GB</td><td>LLM 학습 표준, 모델 배포</td><td>Ampere (A100)부터</td></tr>
+      <tr><td>FP8</td><td class="num">70GB</td><td>H100 이상 서빙의 기본, 큰 모델 학습</td><td>Ada · Hopper (H100)부터</td></tr>
+      <tr><td>INT8</td><td class="num">70GB</td><td>A100 이하 서빙, 에지와 CPU 추론</td><td>Turing (T4)부터</td></tr>
+    </tbody>
+  </table></div>
+  <figure class="fig"><pre class="mermaid">flowchart LR
+  A["FP32&lt;br&gt;280GB"] --> B["BF16&lt;br&gt;140GB"]
+  B --> C["FP8 · INT8&lt;br&gt;70GB"]
+  C --> D["4비트&lt;br&gt;약 35GB"]
+  D -.- N["H100 한 장 80GB에&lt;br&gt;편하게 올라감"]</pre></figure>
+  <div class="prose"><ul>
+    <li>70B 모델을 H100 한 장에 여유 있게 올리려면 4비트, 약 35GB까지 줄입니다.</li>
+  </ul></div>
+  <p class="prose">여기까지가 4회차였습니다. 오늘 본 숫자들이 머무는 곳, 즉 VRAM과 HBM, Shared Memory, 레지스터, 캐시는 5회차에서 다룹니다.</p>
+</section>
+
+<section class="ch" id="refs">
+  <div class="ch-head"><span class="ch-num">+</span><h2>참고</h2></div>
+  <div class="prose"><ul>
+    <li><a href="https://arxiv.org/abs/1710.03740" target="_blank" rel="noopener">Mixed Precision Training (Micikevicius et al., ICLR 2018)</a></li>
+    <li><a href="https://arxiv.org/abs/2209.05433" target="_blank" rel="noopener">FP8 Formats for Deep Learning (2022)</a></li>
+    <li><a href="https://opencompute.org/documents/ocp-8-bit-floating-point-specification-ofp8-revision-1-0-2023-06-20-pdf" target="_blank" rel="noopener">OCP 8-bit Floating Point Specification (OFP8) Rev 1.0 (2023)</a></li>
+    <li><a href="https://docs.nvidia.com/deeplearning/transformer-engine/" target="_blank" rel="noopener">NVIDIA Transformer Engine 문서</a></li>
+    <li><a href="https://cloud.google.com/blog/products/ai-machine-learning/bfloat16-the-secret-to-high-performance-on-cloud-tpus" target="_blank" rel="noopener">Google Cloud — BFloat16: The secret to high performance on Cloud TPUs</a></li>
+    <li><a href="https://arxiv.org/abs/2211.10438" target="_blank" rel="noopener">SmoothQuant 논문</a></li>
+    <li><a href="https://developer.nvidia.com/blog/optimizing-llms-for-performance-and-accuracy-with-post-training-quantization/" target="_blank" rel="noopener">NVIDIA — Post-Training Quantization</a></li>
+    <li><a href="https://www.digitalapplied.com/blog/quantization-tradeoffs-4bit-8bit-fp8-performance-data" target="_blank" rel="noopener">Quantization Tradeoffs: 4-bit vs 8-bit vs FP8 (2026)</a></li>
+    <li><a href="https://developer.nvidia.com/blog/inside-nvidia-blackwell-ultra-the-chip-powering-the-ai-factory-era/" target="_blank" rel="noopener">Inside NVIDIA Blackwell Ultra (2025)</a></li>
+    <li><a href="https://www.nvidia.com/en-us/data-center/hgx/" target="_blank" rel="noopener">NVIDIA HGX Platform (B300 사양)</a></li>
+    <li><a href="https://developer.nvidia.com/blog/unlocking-tensor-core-performance-with-floating-point-emulation-in-cublas/" target="_blank" rel="noopener">Floating-Point Emulation in cuBLAS (2025)</a></li>
+    <li><a href="https://arxiv.org/abs/2510.26788" target="_blank" rel="noopener">Defeating the Training-Inference Mismatch via FP16 (2025)</a></li>
+    <li><a href="https://arxiv.org/abs/2412.19437" target="_blank" rel="noopener">DeepSeek-V3 Technical Report (2024)</a></li>
+    <li><a href="https://arxiv.org/abs/2509.25149" target="_blank" rel="noopener">Pretraining LLMs with NVFP4 (2025)</a></li>
+    <li><a href="https://developer.nvidia.com/blog/introducing-nvfp4-for-efficient-and-accurate-low-precision-inference" target="_blank" rel="noopener">Introducing NVFP4 (NVIDIA)</a></li>
+    <li><a href="https://huggingface.co/nvidia/DeepSeek-R1-0528-NVFP4" target="_blank" rel="noopener">nvidia/DeepSeek-R1-0528-NVFP4 모델 카드</a></li>
+    <li><a href="https://arxiv.org/pdf/2508.10925" target="_blank" rel="noopener">gpt-oss Model Card (2025)</a></li>
+    <li><a href="https://docs.vllm.ai/features/quantization/int8.html" target="_blank" rel="noopener">vLLM — INT8 W8A8</a></li>
+  </ul></div>
+</section>
+
+<nav class="pager" id="pager" data-no="4" aria-label="회차 이동"></nav>
+</main>
+</div>
+
+<footer class="site"><div class="container">자료의 오류나 보충할 내용은 <a href="https://github.com/designerbohyun/domain-study/issues">GitHub 이슈</a>로 알려 주세요.</div></footer>
+<script src="../assets/terms.js"></script>
+<script src="../assets/sessions.js"></script>
+<script src="../assets/site.js"></script>
+<script src="04.js"></script>
+<script type="module">
+import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.esm.min.mjs";
+const t = document.documentElement.getAttribute("data-theme");
+const dark = t ? t === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+mermaid.initialize({ startOnLoad: false, theme: dark ? "dark" : "neutral", fontFamily: "inherit" });
+// ponytail: theme set at load; toggling theme needs a reload to recolor diagrams
+let i = 0;
+for (const el of document.querySelectorAll("pre.mermaid")) {
+  const { svg } = await mermaid.render("mmd" + i++, el.textContent);
+  const box = document.createElement("div");
+  box.className = "mmd";
+  box.innerHTML = svg;
+  el.replaceWith(box);
+}
+</script>
+</body>
+</html>

@@ -5,7 +5,7 @@ window.SESSIONS = [
   { no: 3,  track: "GPU 기본 구조",      topics: "Kernel, Thread, Block, Grid, Warp", meet: "2026-10-20", page: "sessions/03.html" },
   { no: 4,  track: "GPU 기본 구조",      topics: "FP32, FP16, BF16, FP8, INT8", meet: "2026-10-22", page: "sessions/04.html" },
   { no: 5,  track: "GPU 메모리",         topics: "HBM, VRAM, Global·Shared Memory, Register, L1·L2 Cache", meet: "2026-10-27", page: "sessions/05.html" },
-  { no: 6,  track: "GPU 메모리",         topics: "Bandwidth, Latency, Coalesced Access, Unified·Pinned Memory", meet: "2026-10-29" },
+  { no: 6,  track: "GPU 메모리",         topics: "Bandwidth, Latency, Coalesced Access, Unified·Pinned Memory", meet: "2026-10-29", page: "sessions/06.html" },
   { no: 7,  track: "CPU-GPU 연결",       topics: "PCIe, Lane, Gen4·5·6, Host Memory", meet: "2026-11-03" },
   { no: 8,  track: "CPU-GPU 연결",       topics: "NUMA, DMA, BAR, CPU Bottleneck", meet: "2026-11-05" },
   { no: 9,  track: "GPU 간 통신",        topics: "NVLink, NVSwitch, P2P, GPUDirect 계열", meet: "2026-11-10" },

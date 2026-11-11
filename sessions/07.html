@@ -1,0 +1,694 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>7회차 · CPU-GPU 연결 · 도메인 스터디</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.0.6/css/pico.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="../assets/site.css">
+<script>try{var t=localStorage.getItem("theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+</head>
+<body data-root="..">
+<header class="site"><nav class="container">
+  <ul><li><a class="brand" href="../">도메인 스터디</a></li></ul>
+  <ul><li><a href="../">스터디 목차</a></li><li><a href="../structure.html">구조도</a></li><li><a href="../glossary.html">용어 사전</a></li></ul>
+</nav></header>
+
+<div class="container doc">
+<aside class="toc"><details open><summary>이 회차 목차</summary><ol id="toc"></ol></details></aside>
+<main>
+<header class="doc-head">
+  <div class="crumb"><a href="../">스터디 목차</a> / CPU-GPU 연결 / 7회차</div>
+  <h1>7회차 · PCIe, Lane, Gen4·5·6, Host Memory</h1>
+  <p>지난 6회차에서는 메모리의 속도, 즉 대역폭과 지연을 봤습니다. 그리고 CPU 쪽 데이터를 GPU로 빠르게 보내는 방법으로 Pinned Memory를 봤습니다. 오늘은 그 데이터가 실제로 지나가는 길, CPU와 GPU 사이의 연결 안으로 들어가 보겠습니다.</p><p>CPU와 GPU는 <b><button class="t" data-t="pcie">PCIe</button></b>라는 표준 연결로 이어집니다. PCIe는 <b><button class="t" data-t="pcielane">Lane</button></b>, 우리말로 레인이라는 기본 길을 여러 개 묶어 씁니다. 그리고 <b>세대</b>가 하나 오를 때마다 레인 하나의 속도가 두 배가 됩니다. 이 길의 CPU 쪽 끝에 있는 메모리가 <b><button class="t" data-t="hostmem">Host Memory</button></b>입니다.</p>
+  <div class="flow" aria-label="주제별 진행 순서">
+    <span><b>1</b>정의</span><span><b>2</b>등장 배경</span><span><b>3</b>구조</span><span><b>4</b>작동 방식</span><span><b>5</b>이점</span><span><b>6</b>부재 시 문제</span><span><b>7</b>단점</span><span><b>8</b>대안 기술</span><span><b>9</b>대안과의 비교</span><span><b>10</b>최신 트렌드</span>
+  </div>
+</header>
+
+<section class="ch" id="s0">
+  <div class="ch-head"><span class="ch-num">0</span><h2>CPU와 GPU 사이 한눈에 보기</h2></div>
+  <figure class="fig"><pre class="mermaid">flowchart LR
+  subgraph H["Host (CPU 쪽)"]
+    M["Host Memory&lt;br&gt;DDR5"] --- C["CPU&lt;br&gt;Root Complex"]
+  end
+  C --&gt;|"PCIe Gen5 x16&lt;br&gt;한 방향 약 64GB/s"| S["PCIe Switch"]
+  S --&gt; G0["GPU 0&lt;br&gt;HBM3 3.35TB/s"]
+  S --&gt; N["NIC · NVMe SSD"]
+  G0 &lt;--&gt;|"NVLink 900GB/s&lt;br&gt;9회차"| G1["GPU 1"]</pre></figure>
+  <div class="tbl"><table>
+    <thead><tr><th>구간</th><th>대역폭 (대략)</th><th>이 회차에서 보는 곳</th></tr></thead>
+    <tbody>
+      <tr><td>GPU 안 HBM3 (H100 SXM)</td><td>3.35TB/s</td><td>5·6회차에서 봤습니다</td></tr>
+      <tr><td>GPU끼리 NVLink (H100)</td><td>양방향 합 900GB/s</td><td>9회차에서 다룹니다</td></tr>
+      <tr><td>CPU와 GPU 사이 PCIe Gen5 x16</td><td>한 방향 약 64GB/s, 양방향 합 약 128GB/s</td><td>PART 1~3</td></tr>
+      <tr><td>CPU 쪽 DDR5 메모리 (소켓 하나)</td><td>약 307GB/s (8채널) ~ 460GB/s (12채널)</td><td>PART 4</td></tr>
+    </tbody>
+  </table></div>
+  <p class="prose">※ 기준 제품은 5·6회차와 같은 NVIDIA <button class="t" data-t="h100">H100</button> SXM입니다. PCIe 대역폭은 인코딩을 뺀 대략값입니다.</p>
+</section>
+
+<!-- ============ PART 1 ============ -->
+<div class="part" id="p1">
+  <div class="pk">PART 1</div>
+  <h2>PCIe (Peripheral Component Interconnect Express)</h2>
+  <p>먼저 CPU와 GPU를 잇는 길 자체, PCIe부터 보겠습니다.</p>
+</div>
+
+<section class="ch" id="s1-1">
+  <div class="ch-head"><span class="ch-num">1.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="pcie">PCIe</button>는 <b>CPU와 GPU, NIC, SSD 같은 장치를 잇는 표준 고속 직렬 연결</b>입니다.</p>
+  <div class="prose"><ul>
+    <li>장치와 장치를 일대일로 잇습니다. 이걸 점대점, 영어로 point-to-point 연결이라고 합니다.</li>
+    <li>데이터를 패킷 단위로 주고받습니다. 패킷은 데이터를 일정한 크기로 나눠 주소를 붙인 묶음입니다.</li>
+    <li>규격은 업계 단체인 PCI-SIG가 정합니다.</li>
+    <li>GPU는 보통 x16, 즉 레인 16개짜리 슬롯에 연결됩니다. 레인은 PART 2에서 봅니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-2">
+  <div class="ch-head"><span class="ch-num">1.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li>1992년에 나온 PCI는 여러 장치가 선 하나를 함께 쓰는 병렬 버스였습니다. 한 번에 한 장치만 쓸 수 있었고, 최대 약 133MB/s였습니다.</li>
+    <li>그래픽 카드가 이 속도에 막히자, 1997년 그래픽 전용 연결인 AGP가 따로 나왔습니다.</li>
+    <li>장치마다 전용 연결을 만들다 보니, 표준이 여러 갈래로 나뉘었습니다.</li>
+  </ul></div>
+  <div class="callout idea"><span class="say">"그럼 모든 장치를 일대일 직렬 연결 하나의 표준으로 묶고, 필요한 만큼 넓혀 쓰자!"</span>그래서 등장한 것이 바로 <b>PCIe</b>입니다.<ul><li>2003년 PCIe 1.0이 나왔습니다. 레인 하나가 2.5GT/s였습니다.</li><li>그 뒤로 세대마다 레인 하나의 속도가 대략 두 배씩 올랐습니다. PART 3에서 봅니다.</li></ul></div>
+</section>
+
+<section class="ch" id="s1-3">
+  <div class="ch-head"><span class="ch-num">1.3</span><h2>구조</h2></div>
+  <h3>1. 세 개의 층</h3>
+  <p class="prose">PCIe는 일을 세 층으로 나눠 맡습니다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>층</th><th>하는 일</th></tr></thead>
+    <tbody>
+      <tr><td>트랜잭션 층</td><td>읽기와 쓰기 요청을 <button class="t" data-t="tlp">TLP</button>라는 패킷으로 만듭니다</td></tr>
+      <tr><td>데이터 링크 층</td><td>패킷에 순번과 오류 검사값을 붙이고, 잘못 받으면 다시 보냅니다</td></tr>
+      <tr><td>물리 층</td><td>패킷을 레인 위의 전기 신호로 바꿔 보냅니다</td></tr>
+    </tbody>
+  </table></div>
+  <h3>2. 연결 모양</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>구성</th><th>하는 일</th><th>예</th></tr></thead>
+    <tbody>
+      <tr><td><button class="t" data-t="rootcomplex">Root Complex</button></td><td>CPU 쪽 시작점. CPU와 Host Memory를 PCIe에 잇습니다</td><td>CPU 안에 들어 있습니다</td></tr>
+      <tr><td><button class="t" data-t="pcieswitch">PCIe Switch</button></td><td>길 하나를 여러 장치로 나눕니다</td><td>GPU 서버의 PCIe 스위치 칩</td></tr>
+      <tr><td>Endpoint</td><td>맨 끝에 붙는 장치입니다</td><td>GPU, NIC, NVMe SSD</td></tr>
+    </tbody>
+  </table></div>
+  <h3>3. 서버 GPU의 두 가지 형태</h3>
+  <div class="prose"><ul>
+    <li><b>PCIe 카드형:</b> 일반 슬롯에 꽂는 형태입니다.</li>
+    <li><b><button class="t" data-t="sxm">SXM</button> 모듈형:</b> 보드에 직접 올리는 형태입니다. GPU끼리는 NVLink로 잇지만, CPU와는 여전히 PCIe로 잇습니다.</li>
+  </ul></div>
+  <details>
+    <summary>Q. PCIe 카드형 GPU와 SXM GPU는 무엇이 다른가요?</summary>
+  <div class="prose">
+  <p>PCIe 카드형은 GPU끼리도 주로 PCIe나 브리지로 통신합니다. SXM은 NVSwitch를 거쳐 GPU끼리 NVLink로 빠르게 통신하고, 전력 한도도 높습니다. H100 기준으로 PCIe 카드형은 350W, SXM은 700W입니다. 그래서 대규모 학습에는 SXM이 유리합니다.</p>
+  </div>
+  </details>
+</section>
+
+<section class="ch" id="s1-4">
+  <div class="ch-head"><span class="ch-num">1.4</span><h2>작동 방식</h2></div>
+  <p class="prose">코드에서 <code>cudaMemcpy</code>를 부르면 어떤 일이 생기는지 따라가 보겠습니다.</p>
+  <div class="prose"><ol>
+    <li><b>명령 보내기:</b> CPU가 드라이버를 통해 GPU에 "어디서 어디로 몇 바이트"를 적어 보냅니다. GPU의 레지스터를 CPU 메모리 주소처럼 읽고 쓰는 방식이고, 이걸 <button class="t" data-t="mmio">MMIO</button>라고 합니다. 이 주소 창구가 BAR이고, 8회차에서 다룹니다.</li>
+    <li><b>직접 읽기:</b> GPU의 복사 엔진이 PCIe를 거쳐 Host Memory를 직접 읽습니다. CPU가 한 바이트씩 옮기지 않습니다. 이 방식이 <button class="t" data-t="dma">DMA</button>이고, 8회차에서 다룹니다.</li>
+    <li><b>패킷으로 오가기:</b> 읽기 요청과 데이터는 TLP 패킷에 담겨, 세 층을 차례로 지나 레인 위를 오갑니다.</li>
+    <li><b>VRAM에 쓰기:</b> 도착한 데이터를 복사 엔진이 GPU의 VRAM에 씁니다.</li>
+  </ol></div>
+  <div class="prose"><ul>
+    <li>6회차 4.3에서 본 그림, 즉 Pinned Memory에서 DMA 한 번으로 GPU에 가는 길이 바로 이 경로입니다.</li>
+    <li>PCIe는 하위 호환이 됩니다. Gen5 GPU를 Gen4 슬롯에 꽂으면 Gen4 속도로 동작합니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-5">
+  <div class="ch-head"><span class="ch-num">1.5</span><h2>이점</h2></div>
+  <div class="prose"><ul>
+    <li><b>어디에나 연결됩니다:</b> 업계 표준이라 어떤 회사의 CPU와 장치도 서로 연결됩니다.</li>
+    <li><b>빨라지면서도 호환됩니다:</b> 1.0의 x16은 한 방향 약 4GB/s였고, Gen5의 x16은 약 64GB/s입니다. 16배가 되는 동안 하위 호환을 지켰습니다.</li>
+    <li><b>넓게 늘릴 수 있습니다:</b> 스위치로 GPU, NIC, SSD를 유연하게 붙입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-6">
+  <div class="ch-head"><span class="ch-num">1.6</span><h2>부재 시 문제</h2></div>
+  <p class="prose">PCIe 같은 표준이 없다고 가정해 보면, 이런 문제가 생깁니다.</p>
+  <div class="prose"><ul>
+    <li>장치 회사마다 CPU와 잇는 전용 방식을 따로 만들어야 합니다. 같은 서버에 다른 회사 장치를 섞어 쓰기 어렵습니다.</li>
+    <li>NIC나 SSD가 GPU와 직접 주고받는 <button class="t" data-t="gpudirect">GPUDirect</button> 같은 기술도 만들기 어렵습니다. 모두 PCIe라는 같은 주소 체계 위에서 동작하기 때문입니다. GPUDirect는 9회차에서 다룹니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-7">
+  <div class="ch-head"><span class="ch-num">1.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>GPU 안보다 훨씬 느립니다:</b> Gen5 x16은 한 방향 약 64GB/s이고, H100의 <button class="t" data-t="hbm">HBM3</button>는 3.35TB/s입니다. 약 50배 차이입니다.</li>
+    <li><b>GPU끼리 통신하기에도 좁습니다:</b> 양방향 합으로 비교하면, H100의 NVLink 900GB/s는 Gen5 x16 약 128GB/s의 약 7배입니다.</li>
+    <li><b>빨라질수록 신호가 약해집니다:</b> 세대가 오르면 신호가 멀리 가지 못해, 신호를 다시 살리는 칩과 좋은 보드가 필요합니다. 비용이 오릅니다. PART 3에서 봅니다.</li>
+  </ul></div>
+  <details>
+    <summary>Q. 50배 차이는 실제로 어느 정도인가요?</summary>
+  <div class="prose">
+  <p>예시 계산입니다. 6회차에서 본 7B 모델, FP16으로 14GB를 생각해 보겠습니다. HBM3에서 한 번 읽는 데는 약 4ms가 걸립니다. 같은 14GB를 PCIe Gen5 x16으로 보내면 약 0.22초가 걸립니다. 그래서 가중치는 한 번 GPU에 올리면 계속 VRAM에 두고 씁니다.</p>
+  </div>
+  </details>
+</section>
+
+<section class="ch" id="s1-8">
+  <div class="ch-head"><span class="ch-num">1.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. NVLink와 NVSwitch</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> GPU끼리 PCIe를 거치지 않고 잇는 NVIDIA 전용 연결입니다. 9회차에서 다룹니다.</li>
+    <li><b>해결하는 단점:</b> GPU끼리 통신하기에 좁다는 문제를 풉니다.</li>
+  </ul></div>
+  <h3>2. NVLink-C2C</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> NVIDIA CPU와 GPU를 칩 사이에서 직접 잇는 연결입니다. Grace는 900GB/s, Vera는 1.8TB/s입니다.</li>
+    <li><b>해결하는 단점:</b> CPU와 GPU 사이가 느리다는 문제를 풉니다. 대신 NVIDIA CPU에서만 씁니다.</li>
+  </ul></div>
+  <h3>3. CXL</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> <button class="t" data-t="cxl">CXL</button>은 Compute Express Link의 줄임말입니다. PCIe의 물리 신호를 그대로 쓰면서, 장치끼리 같은 메모리를 일관되게 보는 기능, 즉 캐시 일관성을 더한 표준입니다.</li>
+    <li><b>해결하는 단점:</b> PCIe 너머의 메모리를 CPU 메모리처럼 붙여 쓰게 합니다. PART 4에서 다시 봅니다.</li>
+  </ul></div>
+  <h3>4. UALink</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 여러 회사가 함께 만든 가속기끼리의 개방형 연결 표준입니다. NVLink에 대응하는 방향입니다.</li>
+    <li><b>해결하는 단점:</b> GPU끼리의 고속 연결을 한 회사 전용이 아닌 표준으로 쓰게 합니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-9">
+  <div class="ch-head"><span class="ch-num">1.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>연결</th><th>잇는 곳</th><th>대역폭 (대략)</th><th>특징</th></tr></thead>
+    <tbody>
+      <tr><td>PCIe Gen5 x16</td><td>CPU와 GPU, NIC, SSD</td><td>한 방향 약 64GB/s</td><td>범용 표준</td></tr>
+      <tr><td><button class="t" data-t="nvlink">NVLink</button> 4 (H100)</td><td>GPU와 GPU</td><td>양방향 합 900GB/s</td><td>NVIDIA 전용</td></tr>
+      <tr><td>NVLink 5 (B200)</td><td>GPU와 GPU</td><td>1.8TB/s</td><td>NVIDIA 전용</td></tr>
+      <tr><td>NVLink-C2C (Vera)</td><td>CPU와 GPU</td><td>1.8TB/s, 메모리 일관성</td><td>NVIDIA CPU에서만</td></tr>
+      <tr><td>CXL</td><td>메모리 확장, 장치 사이 공유</td><td>PCIe 세대와 같음</td><td>개방 표준, 캐시 일관성</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>PCIe는 GPU 안보다 약 50배 좁은 길입니다.</b> 그래서 CPU와 GPU 사이 전송은 최대한 줄이고, 줄일 수 없으면 계산과 겹쳐서 보냅니다.</div>
+</section>
+
+<section class="ch" id="s1-10">
+  <div class="ch-head"><span class="ch-num">1.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. CPU와 GPU 사이가 PCIe를 떠나고 있습니다</h3>
+  <div class="prose"><ul>
+    <li>2026년 NVIDIA는 Vera CPU를 발표했습니다. GPU와 <button class="t" data-t="c2c">NVLink-C2C</button>로 1.8TB/s로 묶여, GH200의 900GB/s보다 두 배입니다. 6회차 4.10에서 본 내용입니다.</li>
+    <li>NVIDIA는 이 속도가 PCIe Gen6의 약 7배라고 밝혔습니다.</li>
+  </ul></div>
+  <h3>2. GPU끼리의 연결도 개방 표준이 나왔습니다</h3>
+  <div class="prose"><ul>
+    <li>2025년 4월 UALink 컨소시엄이 <button class="t" data-t="ualink">UALink</button> 200G 1.0 규격을 공개했습니다. 레인 하나에 200GT/s이고, 가속기를 최대 1,024개까지 한 묶음으로 잇는 것이 목표입니다.</li>
+    <li>PCIe는 범용 연결로 남고, 성능이 중요한 GPU끼리와 CPU와 GPU 사이는 전용 연결로 옮겨 가는 흐름입니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>PCIe는 사라지지 않지만, 가장 바쁜 길에서는 물러나고 있습니다.</b> NIC, SSD, 일반 서버의 GPU처럼 여러 장치를 두루 잇는 일은 여전히 PCIe 몫입니다.</div>
+</section>
+
+<!-- ============ PART 2 ============ -->
+<div class="part" id="p2">
+  <div class="pk">PART 2</div>
+  <h2>Lane (레인)</h2>
+  <p>여기까지가 PCIe라는 길 전체였습니다. 이제 그 길을 이루는 기본 단위, 레인으로 넘어가겠습니다.</p>
+</div>
+
+<section class="ch" id="s2-1">
+  <div class="ch-head"><span class="ch-num">2.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="pcielane">레인</button>은 <b>PCIe 연결의 기본 단위로, 보내는 신호선 한 쌍과 받는 신호선 한 쌍으로 이루어진 길</b>입니다.</p>
+  <div class="prose"><ul>
+    <li>신호선 한 쌍은 서로 반대인 신호를 함께 보내, 그 차이로 값을 읽습니다. 이걸 차동 신호라고 하고, 잡음에 강합니다.</li>
+    <li>보내는 쌍과 받는 쌍이 따로 있어서, 보내기와 받기를 동시에 합니다. 이걸 full duplex, 즉 양방향 동시 전송이라고 합니다.</li>
+    <li>레인을 몇 개 묶었는지를 링크 폭이라고 하고, x1, x4, x8, x16으로 씁니다.</li>
+    <li>Gen5 레인 하나는 한 방향 약 4GB/s입니다. 16개를 묶은 x16이 약 64GB/s입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-2">
+  <div class="ch-head"><span class="ch-num">2.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li>PCI 같은 병렬 버스는 선 수십 개로 비트를 동시에 보냈습니다.</li>
+    <li>그런데 속도를 올리면, 선마다 신호가 도착하는 시간이 조금씩 어긋났습니다. 선이 많을수록 이 어긋남을 맞추기 어려웠습니다.</li>
+  </ul></div>
+  <div class="callout idea"><span class="say">"그럼 혼자서도 빠르게 달리는 직렬 길을 만들고, 필요한 만큼만 묶어 쓰자!"</span>그래서 등장한 것이 바로 <b>레인</b>입니다.<ul><li>2003년 PCIe 1.0부터 레인을 묶어 폭을 정하는 방식을 썼습니다.</li><li>레인끼리는 따로 동기를 맞추고, 받는 쪽이 다시 순서를 맞춥니다.</li></ul></div>
+</section>
+
+<section class="ch" id="s2-3">
+  <div class="ch-head"><span class="ch-num">2.3</span><h2>구조</h2></div>
+  <h3>1. 링크 폭</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>폭</th><th>Gen5 한 방향 대역폭 (대략)</th><th>주로 쓰는 장치</th></tr></thead>
+    <tbody>
+      <tr><td>x1</td><td class="num">약 4GB/s</td><td>관리용 작은 장치</td></tr>
+      <tr><td>x4</td><td class="num">약 16GB/s</td><td>NVMe SSD</td></tr>
+      <tr><td>x8</td><td class="num">약 32GB/s</td><td>일부 NIC</td></tr>
+      <tr><td>x16</td><td class="num">약 64GB/s</td><td>GPU, 고속 NIC</td></tr>
+    </tbody>
+  </table></div>
+  <h3>2. CPU가 가진 레인 수</h3>
+  <div class="prose"><ul>
+    <li>CPU가 내어 줄 수 있는 레인 수는 정해져 있습니다.</li>
+    <li>AMD EPYC 9004는 소켓 하나에 Gen5 128레인, Intel Xeon Sapphire Rapids는 소켓 하나에 80레인입니다.</li>
+  </ul></div>
+  <h3>3. 레인을 나누는 두 방법</h3>
+  <div class="prose"><ul>
+    <li><b>PCIe 스위치:</b> 위쪽 레인 묶음 하나를 아래쪽 여러 장치에 나눕니다. 위쪽 대역폭은 아래 장치들이 함께 씁니다.</li>
+    <li><b><button class="t" data-t="bifurcation">Bifurcation</button>, 우리말로 분기:</b> x16 슬롯 하나를 x8 두 개, 또는 x4 네 개로 쪼개 씁니다.</li>
+    <li>예를 들어 DGX H100은 GPU 8장과 ConnectX-7 NIC 8개를 PCIe 스위치 아래에 두고, GPU와 NIC를 하나씩 짝지어 배치합니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-4">
+  <div class="ch-head"><span class="ch-num">2.4</span><h2>작동 방식</h2></div>
+  <div class="prose"><ol>
+    <li><b>협상하기:</b> 장치를 연결하면 양쪽이 몇 개의 레인을, 몇 세대 속도로 쓸지 정합니다. 이걸 <button class="t" data-t="linktrain">링크 협상</button>, 영어로 link training이라고 합니다.</li>
+    <li><b>나눠 싣기:</b> 보낼 데이터를 바이트 단위로 쪼개 여러 레인에 차례로 나눠 싣습니다. 이걸 striping이라고 합니다.</li>
+    <li><b>다시 맞추기:</b> 받는 쪽은 레인마다 도착한 바이트를 원래 순서로 다시 붙입니다.</li>
+    <li><b>합산하기:</b> 그래서 대역폭은 레인 수 곱하기 레인 하나의 속도입니다.</li>
+  </ol></div>
+  <p class="prose">일부 레인에 문제가 있으면, 협상 단계에서 더 좁은 폭으로 내려가 계속 동작합니다.</p>
+</section>
+
+<section class="ch" id="s2-5">
+  <div class="ch-head"><span class="ch-num">2.5</span><h2>이점</h2></div>
+  <div class="prose"><ul>
+    <li><b>필요한 만큼만 씁니다:</b> SSD는 x4, GPU는 x16처럼 장치에 맞는 폭을 고릅니다. 레인을 아낍니다.</li>
+    <li><b>고장에도 버팁니다:</b> 레인 일부가 안 되면 더 좁은 폭으로 계속 동작합니다.</li>
+    <li><b>계산이 쉽습니다:</b> 폭이 두 배면 대역폭도 두 배입니다. x8은 x16의 절반입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-6">
+  <div class="ch-head"><span class="ch-num">2.6</span><h2>부재 시 문제</h2></div>
+  <p class="prose">레인이 모자란다고 가정해 보면, 이런 문제가 생깁니다.</p>
+  <div class="prose"><ul>
+    <li>GPU 8장과 NIC 8개, NVMe SSD를 모두 x16으로 CPU에 직접 붙일 수 없습니다.</li>
+    <li>그러면 스위치 위쪽 대역폭을 나눠 써야 해서, 데이터 로딩, 체크포인트 저장, 서버 사이 통신이 함께 느려집니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-7">
+  <div class="ch-head"><span class="ch-num">2.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>CPU 레인 수가 한계입니다:</b> 서버에 붙일 수 있는 장치의 수와 대역폭이 CPU 레인 수에 묶입니다.</li>
+    <li><b>링크가 몰래 내려갑니다:</b> 장착 불량, 라이저 카드, BIOS 설정 때문에 x16이 x8로, Gen5가 Gen3로 떨어질 수 있습니다. 그래도 시스템은 정상처럼 보여서 늦게 발견됩니다.</li>
+    <li><b>스위치 위쪽을 나눠 씁니다:</b> 스위치 아래 장치들이 동시에 바쁘면 서로 대역폭을 빼앗습니다.</li>
+  </ul></div>
+  <details>
+    <summary>Q. x8로 떨어지면 성능이 절반이 되나요?</summary>
+  <div class="prose">
+  <p>CPU와 GPU 사이 대역폭이 절반이 됩니다. 학습 시간 대부분이 계산이면 체감이 작을 수 있습니다. 하지만 데이터 로딩, 체크포인트 저장, 서버 사이 GPUDirect RDMA 통신이 많은 작업은 크게 느려집니다. 그래서 특정 서버만 느리면 링크 폭과 세대부터 확인합니다.</p>
+  </div>
+  </details>
+</section>
+
+<section class="ch" id="s2-8">
+  <div class="ch-head"><span class="ch-num">2.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. PCIe 스위치</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 레인 묶음 하나를 여러 장치로 나눠, 적은 CPU 레인으로 많은 장치를 붙입니다. 최근에는 ConnectX-8처럼 NIC 안에 스위치를 넣기도 합니다.</li>
+    <li><b>해결하는 단점:</b> CPU 레인 수의 한계를 넘깁니다.</li>
+  </ul></div>
+  <h3>2. 듀얼 소켓 서버</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> CPU를 두 개 꽂아 레인 수를 두 배로 늘립니다.</li>
+    <li><b>해결하는 단점:</b> 레인 부족을 풉니다. 대신 CPU마다 메모리와 장치가 나뉘는 <button class="t" data-t="numa">NUMA</button> 문제가 생깁니다. 8회차에서 다룹니다.</li>
+  </ul></div>
+  <h3>3. NVLink</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> GPU끼리의 통신을 PCIe 레인에서 떼어 내 전용 연결로 보냅니다. 9회차에서 다룹니다.</li>
+    <li><b>해결하는 단점:</b> 스위치 위쪽을 GPU끼리 통신이 차지하는 문제를 줄입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-9">
+  <div class="ch-head"><span class="ch-num">2.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>구성</th><th>GPU 하나가 쓰는 대역폭</th><th>특징</th></tr></thead>
+    <tbody>
+      <tr><td>CPU에 직접 x16</td><td>x16 전체를 혼자 씀</td><td>가장 좋지만 CPU 레인을 많이 씀</td></tr>
+      <tr><td>스위치를 거친 x16</td><td>위쪽 대역폭을 나눠 씀</td><td>GPU와 NIC를 같은 스위치에 두면 직접 통신에 유리</td></tr>
+      <tr><td>x8 연결</td><td>절반</td><td>전송이 적은 추론 전용 서버에서 쓰기도 함</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>대역폭은 레인 수 곱하기 레인 하나의 속도입니다.</b> 그래서 GPU가 x16으로, 제 세대 속도로 연결됐는지가 CPU와 GPU 사이 성능의 출발점입니다.</div>
+</section>
+
+<section class="ch" id="s2-10">
+  <div class="ch-head"><span class="ch-num">2.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. NIC 안에 PCIe 스위치가 들어갑니다</h3>
+  <div class="prose"><ul>
+    <li>NVIDIA ConnectX-8 SuperNIC은 PCIe Gen6 스위치를 안에 품고, Gen6 레인 48개를 씁니다. 2025년부터 HGX B300과 GB300 NVL72 시스템에 들어갔습니다.</li>
+    <li>GPU와 NIC 사이를 별도 스위치 칩 없이 이어, 서버 안의 레인 구성을 단순하게 만듭니다.</li>
+    <li>2026년 ConnectX-9 자료에서도 호스트 연결은 PCIe Gen6 최대 48레인이고, 처리량은 최대 1.6Tb/s입니다.</li>
+  </ul></div>
+  <h3>2. 레인 수는 그대로, 레인 속도가 오릅니다</h3>
+  <div class="prose"><ul>
+    <li>2026년 7월 AMD는 EPYC Venice를 출시했습니다. 레인은 128개로 EPYC 9004와 같지만, Gen5가 아닌 Gen6 레인입니다. 같은 레인 수로 대역폭이 두 배가 됩니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>레인은 늘리기보다 빠르게 만드는 쪽으로 가고 있습니다.</b> 그리고 그 레인을 어떻게 나눠 줄지가 서버 설계의 핵심이 됐습니다.</div>
+</section>
+
+<!-- ============ PART 3 ============ -->
+<div class="part" id="p3">
+  <div class="pk">PART 3</div>
+  <h2>PCIe 세대 (Gen4 · Gen5 · Gen6)</h2>
+  <p>여기까지가 레인 수, 즉 길의 폭이었습니다. 이제 레인 하나의 속도를 정하는 PCIe 세대로 넘어가겠습니다.</p>
+</div>
+
+<section class="ch" id="s3-1">
+  <div class="ch-head"><span class="ch-num">3.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="pciegen">PCIe 세대</button>는 <b>PCIe 규격의 버전으로, 세대가 하나 오를 때마다 레인 하나의 전송 속도가 약 두 배가 됩니다.</b></p>
+  <div class="prose"><ul>
+    <li>속도는 <button class="t" data-t="gts">GT/s</button>, 즉 1초에 신호를 몇십억 번 보내는지로 씁니다. 실제 대역폭은 인코딩과 패킷 머리말 때문에 이보다 조금 낮습니다.</li>
+    <li><b>Gen4:</b> 2017년 규격입니다. 16GT/s이고, x16 한 방향 약 32GB/s입니다.</li>
+    <li><b>Gen5:</b> 2019년 규격입니다. 32GT/s이고, x16 한 방향 약 64GB/s입니다.</li>
+    <li><b>Gen6:</b> 2022년 규격입니다. 64GT/s이고, x16 한 방향 약 128GB/s입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-2">
+  <div class="ch-head"><span class="ch-num">3.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li>GPU, NVMe SSD, 고속 NIC가 원하는 대역폭이 PCIe 속도를 계속 앞질렀습니다.</li>
+    <li>특히 AI 서버의 NIC가 문제였습니다. 800Gb/s NIC는 1초에 약 100GB를 보냅니다. Gen5 x16의 한 방향 약 64GB/s로는 감당하지 못합니다.</li>
+  </ul></div>
+  <div class="callout idea"><span class="say">"그럼 레인 수는 그대로 두고, 레인 하나의 속도를 세대마다 두 배로 올리자!"</span>그래서 등장한 것이 바로 <b>세대별 PCIe 규격</b>입니다.<ul><li>대략 3년에서 4년마다 새 세대 규격이 나왔습니다.</li><li>2025년 6월에는 Gen7 규격도 나왔습니다. 3.10에서 봅니다.</li></ul></div>
+</section>
+
+<section class="ch" id="s3-3">
+  <div class="ch-head"><span class="ch-num">3.3</span><h2>구조</h2></div>
+  <h3>1. 세대별 속도</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>세대</th><th>규격 연도</th><th>레인 하나</th><th>신호 방식</th><th>x16 한 방향 (대략)</th><th>대표 장치</th></tr></thead>
+    <tbody>
+      <tr><td>Gen3</td><td class="num">2010</td><td class="num">8GT/s</td><td>NRZ, 128b/130b</td><td class="num">약 16GB/s</td><td>V100 (PCIe), T4</td></tr>
+      <tr><td>Gen4</td><td class="num">2017</td><td class="num">16GT/s</td><td>NRZ, 128b/130b</td><td class="num">약 32GB/s</td><td>A100</td></tr>
+      <tr><td>Gen5</td><td class="num">2019</td><td class="num">32GT/s</td><td>NRZ, 128b/130b</td><td class="num">약 64GB/s</td><td>H100, B200</td></tr>
+      <tr><td>Gen6</td><td class="num">2022</td><td class="num">64GT/s</td><td>PAM4, FLIT, FEC</td><td class="num">약 128GB/s</td><td>ConnectX-8, B300</td></tr>
+      <tr><td>Gen7</td><td class="num">2025</td><td class="num">128GT/s</td><td>PAM4, FLIT, FEC</td><td class="num">약 256GB/s</td><td>아직 제품 없음</td></tr>
+    </tbody>
+  </table></div>
+  <h3>2. Gen6에서 바뀐 신호 방식</h3>
+  <div class="prose"><ul>
+    <li><b>NRZ:</b> Gen5까지 쓴 방식입니다. 신호 한 번에 0과 1, 즉 1비트를 보냅니다.</li>
+    <li><b><button class="t" data-t="pam4">PAM4</button>:</b> Gen6부터 쓰는 방식입니다. 전압을 네 단계로 나눠 신호 한 번에 2비트를 보냅니다. 같은 주파수로 두 배를 보냅니다.</li>
+    <li><b><button class="t" data-t="fec">FEC</button>:</b> 전방 오류 정정입니다. 네 단계 전압은 구분이 어려워 오류가 늘기 때문에, 받는 쪽이 오류를 바로 고치도록 여분 정보를 붙입니다.</li>
+    <li><b><button class="t" data-t="flit">FLIT 모드</button>:</b> 패킷을 고정된 크기로 묶어 보냅니다. FEC를 붙이기 쉽고, 처리도 단순해집니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-4">
+  <div class="ch-head"><span class="ch-num">3.4</span><h2>작동 방식</h2></div>
+  <div class="prose"><ol>
+    <li><b>최고 세대로 맞추기:</b> 연결할 때 양쪽이 지원하는 세대 중 가장 높은 쪽으로 맞춥니다. 장치가 Gen5여도 서버가 Gen4면 Gen4로 동작합니다.</li>
+    <li><b>신호 다시 살리기:</b> 세대가 높을수록 신호가 멀리 못 갑니다. 그래서 보드 배선이 길면 중간에 <button class="t" data-t="retimer">리타이머</button>라는 칩을 넣어 신호를 다시 만듭니다.</li>
+    <li><b>쉴 때는 낮추기:</b> 일이 없을 때는 전력을 아끼려고 링크 속도를 낮췄다가, 전송이 시작되면 다시 올립니다.</li>
+  </ol></div>
+  <details>
+    <summary>Q. 쉬고 있는 GPU의 PCIe 세대가 Gen1로 보이는데 고장인가요?</summary>
+  <div class="prose">
+  <p>대개 고장이 아닙니다. 쉬는 동안 전력을 아끼려고 속도를 낮춘 것입니다. 부하를 준 상태에서 다시 봤을 때 최대 세대와 같아지면 정상입니다.</p>
+  </div>
+  </details>
+</section>
+
+<section class="ch" id="s3-5">
+  <div class="ch-head"><span class="ch-num">3.5</span><h2>이점</h2></div>
+  <div class="prose"><ul>
+    <li><b>같은 레인으로 두 배를 보냅니다:</b> 레인 부족 문제가 그만큼 줄어듭니다.</li>
+    <li><b>빠른 NIC를 제대로 씁니다:</b> NIC 속도를 바이트로 바꾸면 짝이 보입니다. 200Gb/s는 약 25GB/s로 Gen4 x16 안에, 400Gb/s는 약 50GB/s로 Gen5 x16 안에, 800Gb/s는 약 100GB/s로 Gen6 x16 안에 들어갑니다.</li>
+    <li>그래서 GPU 세대와 NIC 속도, PCIe 세대가 함께 올라갑니다. A100은 Gen4와 ConnectX-6 200Gb/s, H100은 Gen5와 ConnectX-7 400Gb/s, B300은 Gen6와 ConnectX-8 800Gb/s가 짝입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-6">
+  <div class="ch-head"><span class="ch-num">3.6</span><h2>부재 시 문제</h2></div>
+  <p class="prose">세대가 낮은 서버를 쓴다고 가정해 보면, 이런 문제가 생깁니다.</p>
+  <div class="prose"><ul>
+    <li>Gen5 GPU를 Gen4 서버에 꽂으면, CPU와 GPU 사이 대역폭이 절반이 됩니다.</li>
+    <li>데이터 로딩, 오프로딩, <button class="t" data-t="kvcache">KV 캐시</button>를 내리고 올리는 일이 모두 느려집니다. KV 캐시는 PART 4에서 봅니다.</li>
+    <li>빠른 NIC가 PCIe에 막혀, 서버 사이 통신이 제 속도를 내지 못합니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-7">
+  <div class="ch-head"><span class="ch-num">3.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>비싸집니다:</b> 세대가 오를수록 보드, 케이블, 리타이머 비용과 전력이 늘어납니다.</li>
+    <li><b>도입이 늦습니다:</b> CPU와 메인보드가 함께 지원해야 의미가 있어서, 장치보다 늦게 퍼집니다. Gen6 장치는 2025년에 나왔지만, Gen6 서버 CPU는 2026년에 나왔습니다. 3.10에서 봅니다.</li>
+    <li><b>그래도 GPU 안보다 느립니다:</b> Gen6 x16 한 방향 약 128GB/s도, HBM3 3.35TB/s의 약 26분의 1입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-8">
+  <div class="ch-head"><span class="ch-num">3.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. CXL</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> PCIe의 같은 세대 물리 신호 위에 메모리 일관성 기능을 얹은 표준입니다.</li>
+    <li><b>해결하는 단점:</b> 새 연결을 따로 깔지 않고 PCIe 세대 향상을 그대로 메모리 확장에 씁니다.</li>
+  </ul></div>
+  <h3>2. NVLink와 NVLink-C2C</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> PCIe 세대가 오르기를 기다리지 않는 전용 고속 연결입니다.</li>
+    <li><b>해결하는 단점:</b> 세대 향상 속도가 느리다는 문제를 우회합니다.</li>
+  </ul></div>
+  <h3>3. CPO</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> <button class="t" data-t="cpo">CPO</button>는 Co-Packaged Optics의 줄임말로, 칩 바로 옆에 광 부품을 붙여 빛으로 보내는 방식입니다. 네트워크 스위치에서 먼저 쓰기 시작했습니다.</li>
+    <li><b>해결하는 단점:</b> 전기 신호가 멀리 못 가는 문제를 풉니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-9">
+  <div class="ch-head"><span class="ch-num">3.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>항목</th><th>Gen4</th><th>Gen5</th><th>Gen6</th></tr></thead>
+    <tbody>
+      <tr><td>x16 한 방향</td><td class="num">약 32GB/s</td><td class="num">약 64GB/s</td><td class="num">약 128GB/s</td></tr>
+      <tr><td>신호 방식</td><td>NRZ</td><td>NRZ</td><td>PAM4, FLIT, FEC</td></tr>
+      <tr><td>맞는 NIC</td><td>200Gb/s급</td><td>400Gb/s급</td><td>800Gb/s급</td></tr>
+      <tr><td>대표 서버</td><td>A100 세대</td><td>H100, B200 세대</td><td>B300 세대</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>장치와 서버 중 낮은 쪽 세대로 동작합니다.</b> 그래서 GPU 세대만큼 서버 플랫폼의 PCIe 세대도 함께 봐야 합니다.</div>
+</section>
+
+<section class="ch" id="s3-10">
+  <div class="ch-head"><span class="ch-num">3.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. Gen6가 실제 서버에 들어왔습니다</h3>
+  <div class="prose"><ul>
+    <li>2025년 NVIDIA ConnectX-8이 Gen6로 HGX B300과 GB300 NVL72 시스템에 들어갔습니다. 2.10에서 본 내용입니다.</li>
+    <li>2026년 7월 AMD EPYC Venice가 Gen6를 지원하는 첫 서버 CPU로 나왔습니다. 다만 전체 제품군은 2027년에 걸쳐 나온다는 보도가 있습니다.</li>
+  </ul></div>
+  <h3>2. Gen7은 나왔고, Gen8은 준비 중입니다</h3>
+  <div class="prose"><ul>
+    <li>2025년 6월 PCI-SIG는 PCIe 7.0 규격을 공개했습니다. 레인 하나 128GT/s이고, x16 양방향 합 최대 512GB/s입니다.</li>
+    <li>2025년 8월에는 PCIe 8.0을 발표했습니다. 256GT/s, x16 양방향 합 1TB/s가 목표이고, 2028년까지 회원사에 규격을 내는 계획입니다.</li>
+    <li>다만 Tom's Hardware는 PCI-SIG 회장이 256GT/s 목표를 아직 탐색 단계라고 조심스럽게 말했다고 보도했습니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>규격은 3년마다 두 배씩 앞서 가지만, 서버에 퍼지는 데는 몇 년이 더 걸립니다.</b> 2026년 현재 GPU 서버의 주력은 Gen5이고, Gen6가 막 들어오는 중입니다.</div>
+</section>
+
+<!-- ============ PART 4 ============ -->
+<div class="part" id="p4">
+  <div class="pk">PART 4</div>
+  <h2>Host Memory (호스트 메모리)</h2>
+  <p>여기까지가 CPU와 GPU를 잇는 길이었습니다. 마지막으로 그 길의 CPU 쪽 끝에 있는 메모리, Host Memory를 보겠습니다.</p>
+</div>
+
+<section class="ch" id="s4-1">
+  <div class="ch-head"><span class="ch-num">4.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="hostmem">Host Memory</button>는 <b>CPU에 연결된 시스템 메모리로, GPU로 보낼 데이터가 출발하고 GPU에서 나온 결과가 도착하는 곳</b>입니다.</p>
+  <div class="prose"><ul>
+    <li>CUDA에서는 CPU를 Host, GPU를 Device라고 부릅니다.</li>
+    <li>보통 DDR4나 DDR5 메모리이고, Grace와 Vera 같은 NVIDIA CPU는 LPDDR5X를 씁니다.</li>
+    <li>6회차 4장에서 본 두 종류가 모두 Host Memory입니다. OS가 옮길 수 있는 Pageable과, 고정해 둔 <button class="t" data-t="pinned">Pinned</button>입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s4-2">
+  <div class="ch-head"><span class="ch-num">4.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li>GPU는 자기 메모리, 즉 <button class="t" data-t="vram">VRAM</button>을 따로 가진 장치입니다. 입력 데이터는 Host Memory에서 받아 와야 합니다.</li>
+    <li>그런데 모델이 VRAM보다 커지면서, VRAM에 다 담지 못하는 데이터가 생겼습니다.</li>
+  </ul></div>
+  <div class="callout idea"><span class="say">"그럼 VRAM에 다 안 들어가는 것은 크고 싼 CPU 쪽 메모리에 잠시 내려 두자!"</span>그래서 Host Memory는 입력을 보내는 곳에서 <b>VRAM 다음의 두 번째 저장 층</b>으로 역할이 넓어졌습니다.<ul><li>옵티마이저 상태를 Host Memory로 내리는 ZeRO-Offload 같은 학습 기법이 나왔습니다.</li><li>추론에서는 KV 캐시를 Host Memory로 내리는 기능이 추론 엔진에 들어갔습니다. 4.10에서 봅니다.</li></ul></div>
+</section>
+
+<section class="ch" id="s4-3">
+  <div class="ch-head"><span class="ch-num">4.3</span><h2>구조</h2></div>
+  <h3>1. 메모리 채널</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>CPU</th><th>소켓 하나의 메모리 채널</th><th>소켓 하나의 대역폭 (대략)</th></tr></thead>
+    <tbody>
+      <tr><td>Intel Xeon Sapphire Rapids</td><td>DDR5 8채널</td><td class="num">약 307GB/s (DDR5-4800 기준)</td></tr>
+      <tr><td>AMD EPYC 9004</td><td>DDR5 12채널</td><td class="num">약 460GB/s (DDR5-4800 기준)</td></tr>
+    </tbody>
+  </table></div>
+  <div class="prose"><ul>
+    <li><button class="t" data-t="ddr5">DDR5</button>-4800 채널 하나는 약 38.4GB/s입니다. 8채널이면 약 307GB/s, 12채널이면 약 460GB/s입니다.</li>
+  </ul></div>
+  <h3>2. 소켓마다 나뉜 메모리</h3>
+  <div class="prose"><ul>
+    <li>CPU가 두 개인 서버는 메모리도 소켓별로 나뉩니다. 내 소켓 메모리는 가깝고, 옆 소켓 메모리는 멉니다. 이게 NUMA이고, 8회차에서 다룹니다.</li>
+  </ul></div>
+  <h3>3. 서버 하나의 예</h3>
+  <div class="prose"><ul>
+    <li>DGX H100은 GPU 8장의 VRAM이 모두 640GB이고, 시스템 메모리는 2TB입니다. Host Memory가 VRAM 합보다 세 배 넘게 큽니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s4-4">
+  <div class="ch-head"><span class="ch-num">4.4</span><h2>작동 방식</h2></div>
+  <p class="prose">AI 작업에서 Host Memory가 하는 일을 순서대로 보겠습니다.</p>
+  <div class="prose"><ol>
+    <li><b>읽고 손질하기:</b> 데이터셋을 디스크에서 읽어 전처리합니다. PyTorch의 DataLoader 워커들이 여기서 일합니다.</li>
+    <li><b>Pinned 버퍼에 담기:</b> 손질한 배치를 Pinned 버퍼에 담습니다. 6회차 4.4에서 본 <code>pin_memory=True</code>입니다.</li>
+    <li><b>GPU로 보내기:</b> GPU 복사 엔진이 PCIe로 읽어 갑니다. 그동안 GPU는 이전 배치를 계산합니다.</li>
+    <li><b>내려 두기:</b> VRAM이 모자라면 옵티마이저 상태나 KV 캐시를 Host Memory로 내려 두고, 필요할 때 다시 올립니다. 이걸 <button class="t" data-t="offload">오프로딩</button>이라고 합니다.</li>
+    <li><b>체크포인트 저장하기:</b> GPU의 학습 상태를 Host Memory로 복사한 뒤 디스크에 씁니다.</li>
+  </ol></div>
+</section>
+
+<section class="ch" id="s4-5">
+  <div class="ch-head"><span class="ch-num">4.5</span><h2>이점</h2></div>
+  <div class="prose"><ul>
+    <li><b>크고 쌉니다:</b> 서버 하나에 수백 GB에서 수 TB까지 둡니다. H100의 VRAM은 80GB입니다.</li>
+    <li><b>늘릴 수 있습니다:</b> 메모리 모듈, 즉 DIMM을 더 꽂아 늘립니다. HBM은 GPU 칩 옆에 붙어 있어 나중에 늘릴 수 없습니다.</li>
+    <li><b>무엇이든 잠시 둡니다:</b> 데이터셋 버퍼, 체크포인트, 내려 둔 가중치와 KV 캐시를 모두 담습니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s4-6">
+  <div class="ch-head"><span class="ch-num">4.6</span><h2>부재 시 문제</h2></div>
+  <p class="prose">Host Memory가 모자란다고 가정해 보면, 이런 문제가 생깁니다.</p>
+  <div class="prose"><ul>
+    <li>DataLoader 워커가 메모리가 모자라 죽거나 느려지고, 그동안 GPU는 기다립니다.</li>
+    <li>체크포인트를 저장하다가 실패합니다.</li>
+    <li>오프로딩과 KV 캐시 확장을 할 수 없어, 같은 GPU로 다룰 수 있는 모델과 문맥 길이가 줄어듭니다.</li>
+  </ul></div>
+  <details>
+    <summary>Q. GPU 메모리는 남는데 학습 Pod가 OOMKilled로 죽어요. 왜 그런가요?</summary>
+  <div class="prose">
+  <p>GPU 메모리가 아니라 Host Memory, 즉 Pod의 메모리 한도를 넘은 것입니다. DataLoader 워커 수, Pinned 버퍼, 체크포인트를 저장할 때 잠깐 늘어나는 메모리를 함께 따져야 합니다. 워커들이 함께 쓰는 공유 메모리 <code>/dev/shm</code>이 모자라면 OOMKilled 대신 bus error로 나타나기도 합니다. 메모리 한도는 16회차에서 다룹니다.</p>
+  </div>
+  </details>
+</section>
+
+<section class="ch" id="s4-7">
+  <div class="ch-head"><span class="ch-num">4.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>GPU에서 보면 멉니다:</b> DDR5 자체는 소켓 하나에 수백 GB/s지만, GPU까지 오는 길은 PCIe Gen5 x16 한 방향 약 64GB/s입니다. 병목은 메모리가 아니라 길입니다.</li>
+    <li><b>어느 소켓 메모리냐에 따라 다릅니다:</b> CPU가 두 개인 서버에서는 GPU와 같은 소켓의 메모리를 써야 빠릅니다. 8회차에서 봅니다.</li>
+    <li><b>Pinned는 마음껏 못 씁니다:</b> 너무 많이 고정하면 시스템 전체가 느려집니다. 6회차 4.7에서 봤습니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s4-8">
+  <div class="ch-head"><span class="ch-num">4.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. Pinned Memory와 비동기 전송</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 보낼 데이터를 Pinned 버퍼에 두고, 계산과 겹쳐 보냅니다. 6회차 4장에서 봤습니다.</li>
+    <li><b>해결하는 단점:</b> 느린 길을 계산 뒤로 감춥니다.</li>
+  </ul></div>
+  <h3>2. GPUDirect Storage</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 스토리지에서 GPU로 Host Memory를 거치지 않고 바로 보냅니다. 9회차에서 다룹니다.</li>
+    <li><b>해결하는 단점:</b> Host Memory를 거치는 단계 자체를 없앱니다.</li>
+  </ul></div>
+  <h3>3. CXL 메모리 확장</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> <button class="t" data-t="cxl">CXL</button>로 메모리 장치를 붙여, CPU 메모리 용량을 늘립니다.</li>
+    <li><b>해결하는 단점:</b> 메모리 채널 수에 묶인 용량 한계를 넘깁니다.</li>
+  </ul></div>
+  <h3>4. 하드웨어로 묶인 CPU 메모리</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> Grace와 Vera처럼 CPU와 GPU를 NVLink-C2C로 묶어, GPU가 CPU 메모리를 빠르게 바로 씁니다.</li>
+    <li><b>해결하는 단점:</b> GPU에서 멀다는 문제를 풉니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s4-9">
+  <div class="ch-head"><span class="ch-num">4.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>층</th><th>용량</th><th>GPU에서 본 대역폭 (대략)</th><th>용도</th></tr></thead>
+    <tbody>
+      <tr><td>VRAM, <button class="t" data-t="hbm">HBM3</button> (H100)</td><td>GPU 하나에 80GB</td><td>3.35TB/s</td><td>계산 중인 데이터</td></tr>
+      <tr><td>Host DDR5, PCIe 경유</td><td>서버 하나에 수백 GB에서 수 TB</td><td>한 방향 약 64GB/s (Gen5 x16)</td><td>로딩 버퍼, 오프로딩, 체크포인트</td></tr>
+      <tr><td>Grace와 Vera 메모리, NVLink-C2C</td><td>CPU 하나에 수백 GB 이상</td><td>900GB/s에서 1.8TB/s</td><td>하드웨어로 묶인 확장 메모리</td></tr>
+      <tr><td>NVMe SSD</td><td>수십 TB</td><td>수 GB/s에서 수십 GB/s</td><td>데이터셋, 체크포인트</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>Host Memory는 넓고 싸지만, GPU에서는 PCIe 너머에 있습니다.</b> 그래서 무엇을 VRAM에 두고 무엇을 Host Memory에 내릴지가 성능을 가릅니다.</div>
+</section>
+
+<section class="ch" id="s4-10">
+  <div class="ch-head"><span class="ch-num">4.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. KV 캐시를 Host Memory로 내립니다</h3>
+  <div class="prose"><ul>
+    <li>긴 문맥과 많은 사용자를 받는 추론에서, <button class="t" data-t="kvcache">KV 캐시</button>를 VRAM에서 Host Memory로, 다시 SSD로 내려 두는 기능이 추론 엔진의 핵심이 됐습니다.</li>
+    <li>NVIDIA Dynamo 문서는 KV Block Manager, 줄여서 KVBM과 LMCache 같은 방식으로 KV 캐시를 CPU 메모리와 디스크로 넓힌다고 설명합니다. vLLM에는 KV 블록을 Pinned CPU 메모리로 내리는 OffloadingConnector가 들어 있습니다.</li>
+    <li>2026년 NVIDIA는 KV 캐시 전용 저장 층인 BlueField-4 기반 Inference Context Memory Storage도 내놓았습니다. 6회차 4.10에서 본 내용입니다.</li>
+  </ul></div>
+  <h3>2. CPU 쪽 메모리 길도 넓어집니다</h3>
+  <div class="prose"><ul>
+    <li>2025년 11월 CXL 컨소시엄은 CXL 4.0 규격을 공개했습니다. 속도를 64GT/s에서 128GT/s로 두 배 올렸습니다. PCIe 7.0과 같은 속도입니다.</li>
+    <li>2026년 7월 출시된 AMD EPYC Venice는 소켓 하나에 DDR5 16채널, 약 1.6TB/s의 메모리 대역폭을 내세웠습니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>Host Memory는 이제 VRAM의 다음 층입니다.</b> VRAM, Host Memory, SSD를 하나의 계층으로 보고 데이터를 옮기는 설계가 늘고 있습니다.</div>
+  <p class="prose">여기까지가 CPU와 GPU를 잇는 길, PCIe와 그 끝의 Host Memory였습니다. 다음 8회차에서는 이 길 위에서 데이터가 실제로 어떻게 움직이는지 봅니다. CPU 소켓마다 메모리까지의 거리가 다른 NUMA, CPU 대신 장치가 메모리를 직접 읽는 DMA, GPU 메모리를 CPU 주소에 여는 창구인 BAR, 그리고 CPU 병목입니다. GPU끼리 PCIe를 거치지 않고 잇는 NVLink와 NVSwitch는 9회차에서 다룹니다.</p>
+</section>
+
+<section class="ch" id="refs">
+  <div class="ch-head"><span class="ch-num">+</span><h2>참고</h2></div>
+  <div class="prose"><ul>
+    <li><a href="https://pcisig.com/" target="_blank" rel="noopener">PCI-SIG 공식 사이트 (규격 현황)</a></li>
+    <li><a href="https://www.tomshardware.com/tech-industry/pcie-7-0-spec-finalized-with-up-to-512gb-s-speeds-pci-sig-targets-1tb-s-for-8-0-as-exploration-phase-begins" target="_blank" rel="noopener">PCIe 7.0 규격 공개, 8.0 탐색 단계 (Tom's Hardware, 2025)</a></li>
+    <li><a href="https://www.businesswire.com/news/home/20250805675479/en" target="_blank" rel="noopener">PCI-SIG PCIe 8.0 발표, 2028년 목표 (Business Wire, 2025.8)</a></li>
+    <li><a href="https://developer.nvidia.com/blog/nvidia-connectx-8-supernics-advance-ai-platform-architecture-with-pcie-gen6-connectivity" target="_blank" rel="noopener">NVIDIA ConnectX-8 SuperNIC — PCIe Gen6 연결 (NVIDIA, 2025)</a></li>
+    <li><a href="https://www.pny.com/en-eu/file%20library/professional/datasheet/mellanox/pny-connectx-datasheet-connectx-9.pdf" target="_blank" rel="noopener">NVIDIA ConnectX-9 SuperNIC 데이터시트 (PNY)</a></li>
+    <li><a href="https://www.storagereview.com/news/amd-6th-gen-epyc-venice-256-cores-1-6tb-s-and-the-first-pcie-gen-6-server-cpu" target="_blank" rel="noopener">AMD EPYC Venice, 첫 PCIe Gen6 서버 CPU (StorageReview, 2026)</a></li>
+    <li><a href="https://techradar.com/pro/amds-venice-is-the-first-2nm-x86-server-chip-but-the-stack-doesnt-fully-ship-until-2027" target="_blank" rel="noopener">AMD Venice 전체 제품군은 2027년까지 (TechRadar, 2026)</a></li>
+    <li><a href="https://www.businesswire.com/news/home/20250408050548/en/UALink-Consortium-Releases-the-Ultra-Accelerator-Link-200G-1.0-Specification" target="_blank" rel="noopener">UALink 200G 1.0 규격 공개 (Business Wire, 2025.4)</a></li>
+    <li><a href="https://www.businesswire.com/news/home/20251118275848/en" target="_blank" rel="noopener">CXL 4.0 규격 공개 (Business Wire, 2025.11)</a></li>
+    <li><a href="https://investor.nvidia.com/news/press-release-details/2026/NVIDIA-Launches-Vera-CPU-Purpose-Built-for-Agentic-AI/default.aspx" target="_blank" rel="noopener">NVIDIA Vera CPU 발표 (NVLink-C2C 1.8TB/s, 2026)</a></li>
+    <li><a href="https://docs.nvidia.com/dynamo/backends/v-llm/kv-cache-offloading" target="_blank" rel="noopener">NVIDIA Dynamo — KV Cache Offloading</a></li>
+    <li><a href="https://nvidianews.nvidia.com/news/nvidia-bluefield-4-powers-new-class-of-ai-native-storage-infrastructure-for-the-next-frontier-of-ai" target="_blank" rel="noopener">NVIDIA BlueField-4 Inference Context Memory Storage (2026)</a></li>
+    <li><a href="https://docs.nvidia.com/dgx/dgxh100-user-guide/" target="_blank" rel="noopener">NVIDIA DGX H100 사용자 가이드</a></li>
+    <li><a href="https://jp.marvell.com/blogs/how-pcie-is-accelerating-ai-revolution.html" target="_blank" rel="noopener">Marvell — How PCIe is Accelerating the AI Revolution</a></li>
+  </ul></div>
+</section>
+
+<nav class="pager" id="pager" data-no="7" aria-label="회차 이동"></nav>
+</main>
+</div>
+
+<footer class="site"><div class="container">자료의 오류나 보충할 내용은 <a href="https://github.com/designerbohyun/domain-study/issues">GitHub 이슈</a>로 알려 주세요.</div></footer>
+<script src="../assets/terms.js"></script>
+<script src="../assets/sessions.js"></script>
+<script src="../assets/site.js"></script>
+<script type="module">
+import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.esm.min.mjs";
+const t = document.documentElement.getAttribute("data-theme");
+const dark = t ? t === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+mermaid.initialize({ startOnLoad: false, theme: dark ? "dark" : "neutral", fontFamily: "inherit" });
+// ponytail: theme set at load; toggling theme needs a reload to recolor diagrams
+let i = 0;
+for (const el of document.querySelectorAll("pre.mermaid")) {
+  const { svg } = await mermaid.render("mmd" + i++, el.textContent);
+  const box = document.createElement("div");
+  box.className = "mmd";
+  box.innerHTML = svg;
+  el.replaceWith(box);
+}
+</script>
+</body>
+</html>

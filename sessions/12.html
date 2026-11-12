@@ -1,0 +1,674 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>12회차 · Topology, Fat-tree, Leaf-Spine · 도메인 스터디</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.0.6/css/pico.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="../assets/site.css">
+<script>try{var t=localStorage.getItem("theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+</head>
+<body data-root="..">
+<header class="site"><nav class="container">
+  <ul><li><a class="brand" href="../">도메인 스터디</a></li></ul>
+  <ul><li><a href="../">스터디 목차</a></li><li><a href="../structure.html">구조도</a></li><li><a href="../glossary.html">용어 사전</a></li></ul>
+</nav></header>
+
+<div class="container doc">
+<aside class="toc"><details open><summary>이 회차 목차</summary><ol id="toc"></ol></details></aside>
+<main>
+<header class="doc-head">
+  <div class="crumb"><a href="../">스터디 목차</a> / 서버 간 통신 / 12회차</div>
+  <h1>12회차 · Topology, Fat-tree, Leaf-Spine</h1>
+  <p>지난 11회차에서는 서버와 서버를 잇는 부품을 봤습니다. RDMA라는 통신 방식, 그걸 실어 나르는 InfiniBand와 Ethernet, 그리고 서버에 꽂히는 NIC였습니다. 오늘은 그 부품을 어떤 모양으로 배치하는지 보겠습니다.</p><p>오늘은 세 가지를 봅니다. 첫째는 서버와 스위치를 잇는 모양 자체, <b><button class="t" data-t="topology">Topology</button></b>입니다. 토폴로지를 평가하는 지표도 함께 봅니다. 둘째는 위로 갈수록 연결을 굵게 해서 어디를 잘라도 대역폭이 줄지 않게 만든 대표 설계, <b><button class="t" data-t="fat-tree">Fat-tree</button></b>입니다. 셋째는 이 설계를 데이터센터에서 실제로 구현하는 2단 스위치 구조, <b><button class="t" data-t="leaf-spine">Leaf-Spine</button></b>입니다. GPU 클러스터용 변형인 Rail-optimized도 여기서 봅니다.</p>
+  <div class="flow" aria-label="주제별 진행 순서">
+    <span><b>1</b>정의</span><span><b>2</b>등장 배경</span><span><b>3</b>구조</span><span><b>4</b>작동 방식</span><span><b>5</b>이점</span><span><b>6</b>부재 시 문제</span><span><b>7</b>단점</span><span><b>8</b>대안 기술</span><span><b>9</b>대안과의 비교</span><span><b>10</b>최신 트렌드</span>
+  </div>
+</header>
+
+<section class="ch" id="s0">
+  <div class="ch-head"><span class="ch-num">0</span><h2>서버 간 연결 한눈에 보기</h2></div>
+  <figure class="fig"><pre class="mermaid">flowchart TB
+  subgraph SP["Spine 계층: 모든 Leaf와 연결"]
+    S1["Spine 1"]
+    S2["Spine 2"]
+  end
+  subgraph LF["Leaf 계층: 레일마다 1대"]
+    L0["Leaf 레일 0"]
+    L1["Leaf 레일 1"]
+    L7["Leaf 레일 7"]
+  end
+  S1 &amp; S2 --- L0 &amp; L1 &amp; L7
+  subgraph A["서버 A, DGX H100"]
+    A0["GPU0 + NIC0"]
+    A1["GPU1 + NIC1"]
+    A7["GPU7 + NIC7"]
+  end
+  subgraph B["서버 B, DGX H100"]
+    B0["GPU0 + NIC0"]
+    B1["GPU1 + NIC1"]
+    B7["GPU7 + NIC7"]
+  end
+  L0 ---|"같은 번호 GPU는 Leaf 하나에서 끝"| A0
+  L0 --- B0
+  L1 --- A1 &amp; B1
+  L7 --- A7 &amp; B7</pre></figure>
+  <div class="tbl"><table>
+    <thead><tr><th>주제</th><th>한 줄 요약</th><th>이어지는 회차</th></tr></thead>
+    <tbody>
+      <tr><td>Topology</td><td>서버와 스위치를 잇는 모양이 대역폭, 지연, 비용을 정함</td><td>9회차 NVLink 도메인, 11회차 InfiniBand와 Ethernet</td></tr>
+      <tr><td>Fat-tree</td><td>위로 갈수록 링크를 늘려 어느 계층에서도 대역폭이 같음</td><td>10회차 NCCL 집단 통신</td></tr>
+      <tr><td>Leaf-Spine</td><td>Fat-tree를 2단 스위치로 구현, 모든 Leaf가 모든 Spine에 연결</td><td>15회차 Kueue, 16회차 Affinity</td></tr>
+    </tbody>
+  </table></div>
+  <p class="prose">※ 기준 제품은 NVIDIA DGX H100 SuperPOD입니다. DGX H100 서버 32대, 즉 GPU 256장이 증설 단위 하나인 1 SU, Scalable Unit입니다. GPU마다 ConnectX-7 NDR 400Gb/s <button class="t" data-t="nic">NIC</button>가 하나씩 붙고, Quantum-2 <button class="t" data-t="infiniband">InfiniBand</button> 스위치로 rail-optimized fat-tree를 만듭니다. 이 스위치는 64포트 QM9700입니다.</p>
+</section>
+
+<!-- ============ PART 1 ============ -->
+<div class="part" id="p1">
+  <div class="pk">PART 1</div>
+  <h2>Topology (네트워크 토폴로지)</h2>
+  <p>먼저 서버와 스위치를 잇는 모양 자체부터 보겠습니다. 11회차에서 본 스위치와 NIC를 같은 개수만 써도, 어떻게 잇느냐에 따라 성능이 달라집니다.</p>
+</div>
+
+<section class="ch" id="s1-1">
+  <div class="ch-head"><span class="ch-num">1.1</span><h2>정의</h2></div>
+  <p class="lead">Topology, 우리말로 망 구성 형태는 <b>서버와 스위치, 그리고 그 사이 링크를 어떤 모양으로 연결할지 정한 구조</b>입니다.</p>
+  <div class="prose"><ul>
+    <li>연결 형태를 점과 선으로 이뤄진 그래프로 그린 것입니다. 실제 케이블 연결은 물리 토폴로지, 트래픽이 지나는 경로는 논리 토폴로지라고 부릅니다.</li>
+    <li>토폴로지가 대역폭, 지연, 장애가 번지는 범위, 그리고 비용을 정합니다.</li>
+    <li>토폴로지를 평가하는 지표는 네 가지입니다.</li>
+  </ul></div>
+  <div class="tbl"><table>
+    <thead><tr><th>지표</th><th>뜻</th><th>무엇을 정하나</th></tr></thead>
+    <tbody>
+      <tr><td><button class="t" data-t="bisection-bandwidth">Bisection Bandwidth</button>, 이분 대역폭</td><td>망을 반으로 잘랐을 때 두 쪽 사이의 총 대역폭</td><td>전체가 동시에 통신할 때의 상한</td></tr>
+      <tr><td>Diameter, 지름</td><td>가장 먼 두 노드 사이의 hop 수</td><td>최악의 지연</td></tr>
+      <tr><td>Oversubscription, 과구독 비율</td><td>아래쪽 서버 방향 대역폭 대 위쪽 상위 스위치 방향 대역폭</td><td>1:1이면 non-blocking</td></tr>
+      <tr><td>Radix</td><td>스위치 한 대의 포트 수</td><td>같은 단 수로 연결할 수 있는 규모</td></tr>
+    </tbody>
+  </table></div>
+  <details>
+    <summary>Q. 이분 대역폭이 왜 중요한가요?</summary>
+  <div class="prose">
+  <p>AllReduce나 AllToAll처럼 클러스터 전체가 동시에 통신하는 작업은, 이분 대역폭이 이론적 상한이기 때문입니다. 망의 절반이 나머지 절반과 통신하는 최악의 경우의 성능을 보여 줍니다.</p>
+  </div>
+  </details>
+</section>
+
+<section class="ch" id="s1-2">
+  <div class="ch-head"><span class="ch-num">1.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li>서버가 늘면 스위치 한 대로 모두 이을 수 없습니다. 여러 스위치를 계층으로 이어야 하고, 잇는 방식에 따라 병목이 생기는 자리가 달라집니다.</li>
+    <li>전통 데이터센터는 바깥과 서버 사이를 오가는 트래픽이 중심이었습니다. 이걸 북남 트래픽이라고 합니다. 그래서 위로 갈수록 대역폭을 줄인 트리, <button class="t" data-t="oversubscription">과구독</button> 4:1에서 8:1도 충분했습니다.</li>
+    <li>AI 학습은 서버와 서버 사이를 오가는 동서 트래픽이 압도적입니다. 게다가 모든 GPU가 동시에 통신합니다.</li>
+  </ul></div>
+  <div class="callout idea"><span class="say">"그럼 어디를 잘라도 대역폭이 줄지 않는 모양으로 잇자!"</span>그래서 등장한 것이 바로 <b>non-blocking 토폴로지</b>입니다.<ul><li>그 대표가 1985년에 제안된 Fat-tree입니다. PART 2에서 봅니다.</li><li>데이터센터에서는 이를 2단 스위치로 구현한 Leaf-Spine을 씁니다. PART 3에서 봅니다.</li></ul></div>
+</section>
+
+<section class="ch" id="s1-3">
+  <div class="ch-head"><span class="ch-num">1.3</span><h2>구조</h2></div>
+  <h3>1. 스위치 단</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>단 수</th><th>구성</th><th>최대 hop</th><th>64포트 스위치, 과구독 1:1 기준 규모</th></tr></thead>
+    <tbody>
+      <tr><td>1단</td><td>스위치 1대</td><td>스위치 1개</td><td class="num">64포트</td></tr>
+      <tr><td>2단</td><td>Leaf-Spine</td><td>스위치 3개</td><td class="num">2,048포트</td></tr>
+      <tr><td>3단</td><td>Leaf-Spine-Super-spine</td><td>스위치 5개</td><td class="num">65,536포트</td></tr>
+    </tbody>
+  </table></div>
+  <div class="prose"><ul>
+    <li>단이 하나 늘 때마다 규모는 크게 늘지만, 거치는 스위치 수도 늘어납니다. 규모 계산식은 PART 2에서 봅니다.</li>
+  </ul></div>
+  <h3>2. 망 분리</h3>
+  <p class="prose">AI 클러스터는 보통 망을 서너 개로 나눕니다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>망</th><th>하는 일</th><th>DGX H100 SuperPOD 스위치</th></tr></thead>
+    <tbody>
+      <tr><td>Compute 백엔드망</td><td>GPU 사이 RDMA, non-blocking</td><td>QM9700, NDR InfiniBand</td></tr>
+      <tr><td>Storage망</td><td>데이터셋, 체크포인트</td><td>QM9700</td></tr>
+      <tr><td>In-band 관리망</td><td>SSH, Kubernetes API, 일반 서비스</td><td>SN4600C, <button class="t" data-t="ethernet">Ethernet</button></td></tr>
+      <tr><td>Out-of-band 관리망</td><td>BMC와 IPMI로 서버 전원과 콘솔 관리</td><td>SN2201, Ethernet</td></tr>
+    </tbody>
+  </table></div>
+  <h3>3. 스케일업과 스케일아웃</h3>
+  <div class="prose"><ul>
+    <li><b>스케일업:</b> 서버나 랙 안의 GPU를 NVLink로 잇는 것입니다. 9회차에서 봤고, DGX H100에서는 GPU 8장이 한 NVLink 도메인입니다.</li>
+    <li><b>스케일아웃:</b> 서버와 서버 사이를 네트워크로 잇는 것입니다. 오늘 보는 범위입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-4">
+  <div class="ch-head"><span class="ch-num">1.4</span><h2>작동 방식</h2></div>
+  <p class="prose">토폴로지 위에서 트래픽이 길을 찾는 순서입니다.</p>
+  <div class="prose"><ol>
+    <li><b>경로 계산:</b> Ethernet은 BGP 같은 라우팅 프로토콜로, InfiniBand는 Subnet Manager가 경로를 계산합니다. Subnet Manager는 11회차에서 봤습니다.</li>
+    <li><b>나눠 보내기:</b> 길이가 같은 경로가 여러 개면 흐름마다 나눠 보냅니다. 이걸 <button class="t" data-t="ecmp">ECMP</button>, Equal-Cost Multi-Path라고 합니다. 혼잡을 보고 경로를 바꾸는 적응형 라우팅도 있습니다.</li>
+    <li><b>통신 순서 정하기:</b> NCCL은 토폴로지를 감지해 링과 트리의 순서를 정합니다. 10회차에서 봤습니다.</li>
+    <li><b>배치:</b> 스케줄러가 토폴로지를 알면 같은 작업의 GPU를 가까이 모아 통신 비용을 줄입니다. 15회차에서 다룹니다.</li>
+  </ol></div>
+  <details>
+    <summary>Q. 과구독이 2:1이면 무슨 일이 생기나요?</summary>
+  <div class="prose">
+  <p>Leaf 아래 서버들이 동시에 최대로 통신하면, 위쪽 링크가 절반뿐이라 최악의 경우 대역폭이 절반으로 떨어집니다. 추론처럼 서버 사이 통신이 적은 작업은 괜찮지만, 대규모 학습에서는 집단 통신이 느려집니다.</p>
+  </div>
+  </details>
+  <details>
+    <summary>Q. 과구독 1:1은 무슨 뜻인가요?</summary>
+  <div class="prose">
+  <p>스위치의 아래쪽 서버 방향 대역폭과 위쪽 상위 스위치 방향 대역폭이 같다는 뜻입니다. 모든 서버가 동시에 최대로 통신해도 병목이 없습니다. 이걸 non-blocking이라고 합니다.</p>
+  </div>
+  </details>
+</section>
+
+<section class="ch" id="s1-5">
+  <div class="ch-head"><span class="ch-num">1.5</span><h2>이점</h2></div>
+  <p class="prose">토폴로지를 잘 설계했을 때 얻는 것입니다.</p>
+  <div class="prose"><ul>
+    <li><b>동시에 통신해도 대역폭이 유지됩니다:</b> 과구독 1:1이면 모든 GPU가 동시에 통신해도 대역폭이 줄지 않아, 학습을 늘렸을 때 효율이 유지됩니다.</li>
+    <li><b>장애 범위가 작아집니다:</b> 경로가 여러 개라 링크 하나가 끊겨도 우회합니다.</li>
+    <li><b>증설 단위가 분명해집니다:</b> DGX H100 SuperPOD는 서버 32대, GPU 256장을 1 SU로 묶고 4 SU까지 늘립니다.</li>
+    <li><b>가까운 GPU끼리 배치할 수 있습니다:</b> 스케줄러가 같은 Leaf, 같은 레일의 GPU를 묶어 줍니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-6">
+  <div class="ch-head"><span class="ch-num">1.6</span><h2>부재 시 문제</h2></div>
+  <p class="prose">토폴로지를 고려하지 않고 망을 짠다고 가정해 보면, 이런 문제가 생깁니다.</p>
+  <div class="prose"><ul>
+    <li>과구독된 상위 링크에서 혼잡이 생깁니다. 집단 통신은 가장 느린 경로에 맞춰지기 때문에 전체 학습이 느려집니다.</li>
+    <li>같은 작업의 GPU가 망 여기저기 흩어지면 hop 수와 혼잡이 함께 늘어납니다.</li>
+    <li>증설할 때마다 다시 배선해야 하고, 한 곳만 고장 나도 전체가 멈추는 단일 장애 지점이 생깁니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-7">
+  <div class="ch-head"><span class="ch-num">1.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>비용과 전력이 큽니다:</b> non-blocking 설계는 스위치, 광모듈, 케이블 수가 많습니다. 클러스터 비용에서 네트워크가 차지하는 몫이 상당합니다.</li>
+    <li><b>규모가 커지면 단이 늘어납니다:</b> 64포트 스위치로는 2단에서 2,048포트가 한계라서, 그보다 크면 3단이 됩니다. 단이 늘면 지연과 장비 수도 늘어납니다.</li>
+    <li><b>바꾸기 어렵습니다:</b> 물리 배선이라 한 번 깔면 구조를 바꾸기 어렵습니다. 1.8에서 봅니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-8">
+  <div class="ch-head"><span class="ch-num">1.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. 고 Radix 스위치</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 포트가 많은 스위치를 씁니다. 144포트 스위치면 2단으로 10,368포트를 잇습니다. PART 2에서 봅니다. 포트 수를 <button class="t" data-t="radix">Radix</button>라고 부릅니다.</li>
+    <li><b>해결하는 단점:</b> 규모가 커져도 단 수가 늘지 않게 합니다.</li>
+  </ul></div>
+  <h3>2. Rail-optimized 설계</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 서버마다 같은 번호 GPU의 NIC를 같은 Leaf에 모읍니다. PART 3에서 봅니다.</li>
+    <li><b>해결하는 단점:</b> 집단 통신이 Leaf에서 끝나 상위 계층 부하가 줄어듭니다.</li>
+  </ul></div>
+  <h3>3. 광 회로 스위치</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> <button class="t" data-t="ocs">OCS</button>, Optical Circuit Switch는 빛의 경로를 바꿔 링크 연결 자체를 소프트웨어로 바꿉니다. Google TPU Pod가 이 방식을 씁니다.</li>
+    <li><b>해결하는 단점:</b> 한 번 깔면 바꾸기 어려운 물리 배선의 한계를 줄입니다.</li>
+  </ul></div>
+  <h3>4. 토폴로지 인식 스케줄링</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> Kueue의 Topology Aware Scheduling이나 Slurm의 topology 플러그인으로, 같은 작업의 GPU를 같은 Leaf, 같은 레일 그룹에 배치합니다. 15회차에서 다룹니다.</li>
+    <li><b>해결하는 단점:</b> GPU가 흩어져 hop 수와 혼잡이 늘어나는 문제를 줄입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-9">
+  <div class="ch-head"><span class="ch-num">1.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>항목</th><th>Fat-tree, Leaf-Spine</th><th>Rail-optimized Fat-tree</th><th><button class="t" data-t="dragonfly">Dragonfly</button></th><th>3D Torus</th></tr></thead>
+    <tbody>
+      <tr><td>연결 방식</td><td>계층 스위치, 다중 경로</td><td>GPU 번호별로 레일 분리</td><td>그룹 안은 완전 연결, 그룹 사이는 직접 연결</td><td>이웃끼리만 연결</td></tr>
+      <tr><td>최대 hop</td><td>2단 3, 3단 5</td><td>같은 레일 1</td><td>적음, 그룹 사이 1</td><td>규모에 비례해 증가</td></tr>
+      <tr><td>이분 대역폭</td><td>최대, non-blocking 가능</td><td>최대</td><td>높음, 트래픽 패턴에 의존</td><td>상대적으로 낮음</td></tr>
+      <tr><td>스위치 비용</td><td>높음</td><td>높음</td><td>중간</td><td>낮음, 직접 연결</td></tr>
+      <tr><td>운영 난이도</td><td>낮음, 표준적</td><td>낮음</td><td>높음, 적응형 라우팅 필수</td><td>중간, 작업 배치 제약</td></tr>
+      <tr><td>대표 사례</td><td>대부분의 AI 데이터센터</td><td>DGX SuperPOD</td><td>HPE Slingshot, Frontier</td><td>Google TPU v4, v5p Pod</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>AI 학습은 모든 GPU가 동시에 통신하므로, 어디를 잘라도 대역폭이 줄지 않는 non-blocking 토폴로지가 기준입니다.</b></div>
+</section>
+
+<section class="ch" id="s1-10">
+  <div class="ch-head"><span class="ch-num">1.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. 망을 여러 판으로 나눕니다</h3>
+  <div class="prose"><ul>
+    <li>2026년 5월 NVIDIA와 Technion 연구진은 논문 High-speed Networking for Giga-Scale AI Factories, arXiv 2605.21187에서 Spectrum-X를 <button class="t" data-t="multiplane">multi-plane</button> 망으로 설명했습니다.</li>
+    <li>NIC 하나가 서로 독립된 여러 망, 즉 plane에 나눠 연결됩니다. NIC가 plane 사이 부하를 나누고, 스위치는 plane 안에서 패킷마다 경로를 고릅니다.</li>
+    <li>목표는 단을 늘리지 않고 2단 fat-tree 같은 얕은 구조로 수십만 엔드포인트까지 키우는 것입니다.</li>
+    <li>DGX B300 SuperPOD 참조 설계도 twin-plane, 즉 두 판으로 나눈 fat-tree를 씁니다.</li>
+  </ul></div>
+  <h3>2. 스케일업 도메인이 랙 단위로 커졌습니다</h3>
+  <div class="prose"><ul>
+    <li>GB200 NVL72처럼 랙 하나의 GPU 72장이 한 NVLink 도메인으로 묶이면서, 스케일아웃 망은 서버보다 랙을 단위로 설계하고 배치하게 됐습니다. NVLink 도메인은 9회차에서 봤습니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>클러스터가 커질수록 단을 늘리기보다, 망을 여러 판으로 나눠 얕은 구조를 지키는 쪽으로 갑니다.</b></div>
+</section>
+
+<!-- ============ PART 2 ============ -->
+<div class="part" id="p2">
+  <div class="pk">PART 2</div>
+  <h2>Fat-tree</h2>
+  <p>여기까지가 토폴로지를 보는 눈, 평가 지표였습니다. 이제 그 지표에서 가장 좋은 점수를 받는 대표 설계, Fat-tree로 넘어가겠습니다.</p>
+</div>
+
+<section class="ch" id="s2-1">
+  <div class="ch-head"><span class="ch-num">2.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="fat-tree">Fat-tree</button>는 <b>위로 갈수록 링크를 굵게, 즉 많게 해서 모든 계층의 대역폭이 같아지도록 만든 트리 토폴로지</b>입니다.</p>
+  <div class="prose"><ul>
+    <li>일반 트리는 위로 갈수록 트래픽이 소수 링크로 모여 병목이 됩니다. Fat-tree는 상위 링크를 뚱뚱하게 만들어 이 병목을 없앱니다.</li>
+    <li>그래서 어떤 두 서버 사이에도 대역폭 손실 없이 통신할 수 있습니다.</li>
+    <li>현대 데이터센터에서는 같은 포트 수의 스위치 여러 대로 만드는 Clos 망 형태로 씁니다.</li>
+  </ul></div>
+  <details>
+    <summary>Q. Fat-tree와 Leaf-Spine은 같은 건가요?</summary>
+  <div class="prose">
+  <p>거의 같은 개념의 다른 이름입니다. Fat-tree는 위로 갈수록 대역폭을 유지한다는 원리이고, Leaf-Spine은 데이터센터에서 2단 Clos 망으로 구현한 구체적인 형태를 부를 때 씁니다. 2단 non-blocking Leaf-Spine이 곧 2단 fat-tree입니다.</p>
+  </div>
+  </details>
+</section>
+
+<section class="ch" id="s2-2">
+  <div class="ch-head"><span class="ch-num">2.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li>슈퍼컴퓨터는 모든 노드가 모든 노드와 통신하는 패턴을 지원해야 했습니다.</li>
+    <li>그러려면 포트가 아주 많은 거대한 스위치 하나가 필요했고, 이런 스위치는 비쌌습니다.</li>
+  </ul></div>
+  <div class="callout idea"><span class="say">"그럼 작은 스위치 여러 대를 층층이 이어서, 큰 스위치 하나처럼 쓰자!"</span>그래서 등장한 것이 바로 <b>Fat-tree</b>입니다.<ul><li>1985년 Charles Leiserson이 병렬 컴퓨터의 연결망으로 제안했습니다.</li><li>2008년 SIGCOMM에서 Al-Fares 등이 같은 포트 수의 범용 스위치로 데이터센터 fat-tree를 만드는 방법을 발표했습니다. 지금 AI 데이터센터 망의 바탕이 된 논문입니다.</li></ul></div>
+</section>
+
+<section class="ch" id="s2-3">
+  <div class="ch-head"><span class="ch-num">2.3</span><h2>구조</h2></div>
+  <h3>1. 포트를 반씩 나눕니다</h3>
+  <div class="prose"><ul>
+    <li>각 스위치는 포트 절반을 아래쪽에, 나머지 절반을 위쪽에 씁니다. 그래서 아래와 위의 대역폭이 1:1로 같습니다.</li>
+  </ul></div>
+  <h3>2. 규모는 포트 수가 정합니다</h3>
+  <p class="prose">포트가 k개인 스위치로 만들 때의 최대 엔드포인트 수입니다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>구성</th><th>계산식</th><th>64포트 400G 스위치</th><th>144포트 800G 스위치</th></tr></thead>
+    <tbody>
+      <tr><td>2단, Leaf-Spine</td><td>k² ÷ 2</td><td class="num">2,048</td><td class="num">10,368</td></tr>
+      <tr><td>3단</td><td>k³ ÷ 4</td><td class="num">65,536</td><td class="num">746,496</td></tr>
+    </tbody>
+  </table></div>
+  <div class="prose"><ul>
+    <li>2단이면 포트 수의 제곱 나누기 2입니다. 64포트 스위치면 2,048개이고, GPU마다 NIC가 하나면 GPU 2,048장입니다.</li>
+    <li>144포트 스위치면 10,368개입니다. Quantum-X800 같은 144포트 800G 스위치로 2단 fat-tree에서 1만 GPU 이상을 잇는다는 말의 근거입니다.</li>
+    <li>3단이면 포트 수의 세제곱 나누기 4입니다. 64포트 스위치면 65,536개입니다.</li>
+  </ul></div>
+  <figure class="fig">
+    <div class="fig-title">포트 수 k로 2단 Leaf-Spine 규모 계산해 보기</div>
+    <div class="seg" id="k-seg" aria-label="스위치 포트 수"></div>
+    <div class="split">
+      <div class="scroll-x"><svg id="kSvg" viewBox="0 0 640 170" width="100%" style="min-width:420px" role="img" aria-label="Spine 계층과 Leaf 계층, 그리고 Leaf 하나가 모든 Spine에 연결된 모습"></svg></div>
+      <div class="panel" id="kPanel" aria-live="polite"></div>
+    </div>
+    <div class="legend"><span><i class="sw" style="background:var(--tensor)"></i>Spine</span><span><i class="sw" style="background:var(--accent)"></i>Leaf</span><span><i class="sw" style="background:var(--mem)"></i>Leaf 하나의 위쪽 링크</span></div>
+    <figcaption>과구독 1:1 기준입니다. Leaf는 포트 절반을 서버에, 절반을 Spine에 씁니다. 선은 Leaf 하나가 모든 Spine에 한 줄씩 연결되는 모습만 보여 줍니다.</figcaption>
+  </figure>
+  <h3>3. DGX H100 SuperPOD</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>구성</th><th>수치</th></tr></thead>
+    <tbody>
+      <tr><td>1 SU</td><td>DGX H100 32대, GPU 256장</td></tr>
+      <tr><td>서버당 백엔드 연결</td><td>NDR 400Gb/s 8개, GPU당 1개</td></tr>
+      <tr><td>1 SU 백엔드 포트</td><td class="num">32 × 8 = 256</td></tr>
+      <tr><td>최대 규모</td><td>4 SU, 서버 127대</td></tr>
+      <tr><td>스위치</td><td>QM9700, NDR 64포트</td></tr>
+      <tr><td>토폴로지</td><td>rail-optimized, full fat-tree</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="ch" id="s2-4">
+  <div class="ch-head"><span class="ch-num">2.4</span><h2>작동 방식</h2></div>
+  <p class="prose">서버 하나에서 다른 서버로 가는 길입니다.</p>
+  <div class="prose"><ol>
+    <li><b>올라가기:</b> 출발 서버에서 위쪽 스위치로 올라갑니다. 목적지가 같은 하위 트리에 있으면 낮은 단에서 바로 꺾습니다.</li>
+    <li><b>꼭대기:</b> 두 서버의 공통 상위 스위치에 닿습니다.</li>
+    <li><b>내려가기:</b> 거기서 아래로 목적지까지 내려갑니다.</li>
+    <li><b>나눠 보내기:</b> 서버 쌍마다 길이가 같은 경로가 여러 개 있습니다. Ethernet은 ECMP 해시나 적응형 라우팅으로, InfiniBand는 <button class="t" data-t="subnetmgr">Subnet Manager</button>가 ftree, up-down 같은 fat-tree 전용 라우팅 알고리즘으로 경로를 고르게 나눕니다.</li>
+  </ol></div>
+  <details>
+    <summary>Q. 64포트 스위치로 만든 2단 non-blocking Leaf-Spine의 최대 서버 포트 수는?</summary>
+  <div class="prose">
+  <p>64의 제곱 나누기 2, 2,048개입니다. Leaf 64대가 아래쪽 포트를 32개씩 가지기 때문입니다.</p>
+  </div>
+  </details>
+</section>
+
+<section class="ch" id="s2-5">
+  <div class="ch-head"><span class="ch-num">2.5</span><h2>이점</h2></div>
+  <div class="prose"><ul>
+    <li><b>Full bisection bandwidth:</b> 이론상 모든 서버가 동시에 최대 속도로 통신할 수 있습니다.</li>
+    <li><b>다중 경로:</b> 링크나 스위치가 고장 나도 다른 경로로 우회합니다.</li>
+    <li><b>같은 스위치로 크게 만듭니다:</b> 한 모델의 스위치만으로 144포트면 2단에서 10,368포트까지 갑니다. 구매와 예비품 관리가 단순해집니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-6">
+  <div class="ch-head"><span class="ch-num">2.6</span><h2>부재 시 문제</h2></div>
+  <p class="prose">Fat-tree 대신 일반 트리를 쓴다고 가정해 보면, 이런 문제가 생깁니다.</p>
+  <div class="prose"><ul>
+    <li>상위 스위치와 링크에 트래픽이 몰립니다. 서버들이 동시에 통신하면 심각한 병목이 생깁니다.</li>
+    <li>병목을 피하려면 포트가 아주 많은 거대한 섀시형 스위치에 기대야 합니다. 비용과 장애 위험이 함께 커집니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-7">
+  <div class="ch-head"><span class="ch-num">2.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>장비가 아주 많습니다:</b> 스위치, 케이블, 광모듈 수가 많습니다. non-blocking 3단은 서버 한 대당 여러 개의 광모듈이 필요합니다.</li>
+    <li><b>규모를 키우면 단이 늘어납니다:</b> 단이 늘면 지연이 늘고, 상위 계층 증설 계획도 미리 세워야 합니다.</li>
+    <li><b>실제 성능은 경로 분산에 달려 있습니다:</b> ECMP 해시가 충돌하면 이론치에 못 미칩니다. 3.7에서 다시 봅니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-8">
+  <div class="ch-head"><span class="ch-num">2.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. 고 Radix 스위치와 CPO</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 포트가 많은 스위치에, 광 변환 장치를 스위치 칩 바로 옆에 함께 패키징하는 <button class="t" data-t="cpo">CPO</button>, Co-Packaged Optics를 더합니다.</li>
+    <li><b>해결하는 단점:</b> 단 수와 광모듈 수를 함께 줄입니다.</li>
+  </ul></div>
+  <h3>2. Rail-optimized fat-tree</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 같은 레일의 트래픽은 Leaf에서 끝냅니다. PART 3에서 봅니다.</li>
+    <li><b>해결하는 단점:</b> 상위 링크 부하를 줄입니다.</li>
+  </ul></div>
+  <h3>3. Rail-only</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 2023년 MIT와 Meta 연구진이 제안한 구조입니다. 레일 사이 트래픽은 서버 안 NVLink로 처리하고, Spine 계층을 아예 없앱니다. 논문은 일반 GPU 데이터센터 망보다 비용을 38%에서 77%, 전력을 37%에서 75% 줄인다고 밝혔습니다.</li>
+    <li><b>해결하는 단점:</b> 장비 수와 비용을 줄입니다. 대신 MoE 모델의 AllToAll 통신에는 손해가 있습니다.</li>
+  </ul></div>
+  <h3>4. 적응형 라우팅과 패킷 스프레이</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> InfiniBand Adaptive Routing, Spectrum-X, Ultra Ethernet처럼 흐름 대신 패킷 단위로 경로를 나눕니다. 11회차에서 봤습니다.</li>
+    <li><b>해결하는 단점:</b> 경로 분산의 품질을 높입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-9">
+  <div class="ch-head"><span class="ch-num">2.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>항목</th><th>일반 트리, 과구독</th><th>Fat-tree, non-blocking</th><th>Rail-optimized Fat-tree</th><th>Rail-only</th></tr></thead>
+    <tbody>
+      <tr><td>이분 대역폭</td><td>낮음</td><td>최대</td><td>최대, 같은 레일은 Leaf 하나</td><td>레일 사이는 서버 안 <button class="t" data-t="nvlink">NVLink</button>에 의존</td></tr>
+      <tr><td>비용</td><td>낮음</td><td>높음</td><td>높음</td><td>낮음, Spine 없음</td></tr>
+      <tr><td>적합한 트래픽</td><td>북남, 웹 서비스</td><td>임의의 동서</td><td>GPU 집단 통신</td><td>MoE 없는 LLM 학습</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>Fat-tree의 규모는 스위치 포트 수가 정합니다.</b> 2단이면 포트 수의 제곱 나누기 2라서, 144포트 스위치면 2단으로 1만 GPU 이상을 잇습니다.</div>
+</section>
+
+<section class="ch" id="s2-10">
+  <div class="ch-head"><span class="ch-num">2.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. CPO 고 Radix 스위치가 나왔습니다</h3>
+  <div class="prose"><ul>
+    <li>2025년 3월 GTC에서 NVIDIA는 Quantum-X Photonics InfiniBand 스위치를 발표했습니다. 800Gb/s 포트 144개, 모두 115.2Tb/s이고, 광 엔진을 함께 패키징하고 액체로 냉각합니다.</li>
+    <li>2026년 6월에는 Lambda가 이 계열의 첫 CPO 스위치를 받았다는 보도가 나왔습니다. Lambda는 같은 구성에서 기존 스위치가 약 7.0kW, CPO 스위치가 약 3.95kW를 쓴다고 밝혔습니다. 다만 일반 공급 시점은 아직 확인되지 않았습니다.</li>
+    <li>광모듈을 꽂는 방식의 Quantum-X800 Q3400도 같은 144포트이고, 데이터시트는 2단 fat-tree로 NIC 10,368개를 잇는다고 적고 있습니다.</li>
+  </ul></div>
+  <h3>2. 3단을 2단으로 줄입니다</h3>
+  <div class="prose"><ul>
+    <li>포트가 많을수록 같은 규모를 더 적은 단으로 만듭니다. 단이 줄면 지연, 광모듈 수, 전력이 함께 줄어듭니다.</li>
+    <li>64포트 스위치로 1만 GPU를 이으려면 3단이 필요하지만, 144포트 스위치는 2단으로 됩니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>스위치 포트 수가 늘수록 같은 규모를 더 얕은 fat-tree로 만들 수 있고, 그만큼 지연과 전력이 줄어듭니다.</b></div>
+</section>
+
+<!-- ============ PART 3 ============ -->
+<div class="part" id="p3">
+  <div class="pk">PART 3</div>
+  <h2>Leaf-Spine</h2>
+  <p>여기까지가 원리인 Fat-tree였습니다. 이제 이 원리를 데이터센터에서 실제로 구현한 모양, Leaf-Spine으로 넘어가겠습니다. GPU 클러스터용 변형인 Rail-optimized도 여기서 함께 봅니다.</p>
+</div>
+
+<section class="ch" id="s3-1">
+  <div class="ch-head"><span class="ch-num">3.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="leaf-spine">Leaf-Spine</button>은 <b>서버가 연결되는 Leaf 스위치와, 모든 Leaf를 서로 이어 주는 Spine 스위치로 이뤄진 2단 네트워크 구조</b>입니다.</p>
+  <div class="prose"><ul>
+    <li><b>Leaf:</b> 서버와 직접 연결되는 스위치입니다. 랙 맨 위에 놓는 ToR, Top-of-Rack 스위치 역할을 합니다.</li>
+    <li><b>Spine:</b> Leaf끼리만 잇는 상위 스위치입니다. 서버를 직접 연결하지 않습니다.</li>
+    <li><b>규칙:</b> 모든 Leaf는 모든 Spine에 연결합니다. Leaf끼리, Spine끼리는 연결하지 않습니다.</li>
+    <li>규모가 더 커지면 Spine 위에 Super-spine, 다른 이름으로 Core를 두는 3단 구조가 됩니다.</li>
+    <li><b>Rail-optimized:</b> GPU 클러스터용 변형입니다. 서버마다 같은 번호 GPU와 그 NIC를 묶은 것을 레일이라고 하고, 레일마다 Leaf를 따로 둡니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-2">
+  <div class="ch-head"><span class="ch-num">3.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li>2000년대 데이터센터는 Access, Aggregation, Core의 전통 3계층 구조였습니다. 북남 트래픽에 맞춘 구조입니다.</li>
+    <li>이 구조는 루프를 막으려고 <button class="t" data-t="stp">STP</button>, 스패닝 트리 프로토콜로 일부 링크를 막아 두었습니다. 그만큼 대역폭이 버려졌습니다.</li>
+    <li>가상화, 클라우드, 분산 처리로 서버 사이 동서 트래픽이 급격히 늘었습니다.</li>
+  </ul></div>
+  <div class="callout idea"><span class="say">"그럼 모든 Leaf를 모든 Spine에 이어서, 어느 서버든 같은 거리로 만들자!"</span>그래서 등장한 것이 바로 <b>Leaf-Spine</b>입니다.<ul><li>2010년대 초부터 데이터센터 망의 표준이 됐습니다.</li><li>GPU 클러스터에서는 집단 통신 패턴에 맞춰 Leaf를 레일 기준으로 나눈 rail-optimized 구조로 씁니다. DGX SuperPOD가 대표입니다.</li></ul></div>
+</section>
+
+<section class="ch" id="s3-3">
+  <div class="ch-head"><span class="ch-num">3.3</span><h2>구조</h2></div>
+  <h3>1. 포트 계산 예</h3>
+  <p class="prose">64포트 400G 스위치로 non-blocking을 만들 때입니다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>구성</th><th>수</th><th>계산</th></tr></thead>
+    <tbody>
+      <tr><td>Leaf 아래쪽, 서버 방향</td><td class="num">32포트</td><td>64 ÷ 2</td></tr>
+      <tr><td>Leaf 위쪽, Spine 방향</td><td class="num">32포트</td><td>Spine마다 1포트</td></tr>
+      <tr><td>Spine 최대</td><td class="num">32대</td><td>Leaf 위쪽 포트 수</td></tr>
+      <tr><td>Leaf 최대</td><td class="num">64대</td><td>Spine 포트 수</td></tr>
+      <tr><td>서버 포트 합계</td><td class="num">2,048</td><td>64 Leaf × 32</td></tr>
+    </tbody>
+  </table></div>
+  <h3>2. <button class="t" data-t="rail-optimized">Rail-optimized</button>, DGX H100 SuperPOD 1 SU</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>구성</th><th>수</th><th>계산</th></tr></thead>
+    <tbody>
+      <tr><td>서버</td><td class="num">32대</td><td>1 SU</td></tr>
+      <tr><td>레일</td><td class="num">8개</td><td>서버당 GPU와 NIC 8쌍</td></tr>
+      <tr><td>Leaf</td><td class="num">8대</td><td>레일마다 1대</td></tr>
+      <tr><td>Leaf 하나의 서버 방향 포트</td><td class="num">32</td><td>서버 32대의 같은 번호 NIC</td></tr>
+      <tr><td>1 SU 서버 방향 포트 합계</td><td class="num">256</td><td>8 Leaf × 32</td></tr>
+    </tbody>
+  </table></div>
+  <div class="prose"><ul>
+    <li>GPU0의 NIC는 모두 레일 0 Leaf에, GPU1의 NIC는 모두 레일 1 Leaf에 꽂습니다. 이렇게 GPU7까지 8개 레일을 만듭니다.</li>
+    <li>4 SU로 늘리면 Leaf는 32대입니다. Leaf마다 위쪽 포트 32개를 64포트 Spine에 나눠 꽂으면, 계산상 Spine은 16대입니다.</li>
+  </ul></div>
+  <h3>3. 과구독 조절</h3>
+  <div class="prose"><ul>
+    <li>Leaf의 아래쪽 대 위쪽 포트 비율로 정합니다. AI 백엔드망은 1:1, 일반 서비스망은 3:1처럼 씁니다.</li>
+  </ul></div>
+  <h3>4. 라우팅</h3>
+  <div class="prose"><ul>
+    <li>Ethernet은 L3 Leaf-Spine에 BGP와 ECMP를 쓰는 구성이 표준입니다.</li>
+    <li>InfiniBand는 Subnet Manager가 경로를 정합니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-4">
+  <div class="ch-head"><span class="ch-num">3.4</span><h2>작동 방식</h2></div>
+  <div class="prose"><ol>
+    <li><b>같은 Leaf의 서버끼리:</b> Leaf에서 바로 전달합니다. 스위치 1개만 거칩니다.</li>
+    <li><b>다른 Leaf의 서버끼리:</b> Leaf, 아무 Spine, Leaf 순으로 스위치 3개를 거칩니다.</li>
+    <li><b>분산:</b> Spine이 여러 대라서 ECMP로 흐름을 Spine마다 나눕니다.</li>
+    <li><b>장애:</b> Spine 한 대가 고장 나면 나머지 Spine으로 자동 우회합니다. 대역폭만 Spine 수분의 1만큼 줄어듭니다.</li>
+    <li><b>레일:</b> 다른 서버의 같은 번호 GPU끼리는 레일 Leaf 하나에서 끝납니다. 번호가 다른 GPU로 보낼 데이터는 서버 안 NVLink로 먼저 옮긴 뒤 보냅니다.</li>
+  </ol></div>
+  <details>
+    <summary>Q. Leaf-Spine에서 서로 다른 Leaf의 서버 사이 hop 수는?</summary>
+  <div class="prose">
+  <p>스위치 3개입니다. Leaf, Spine, Leaf 순으로 거칩니다.</p>
+  </div>
+  </details>
+  <details>
+    <summary>Q. Rail-optimized 설계에서 Rail은 무엇인가요?</summary>
+  <div class="prose">
+  <p>각 서버의 같은 번호 GPU와 그 NIC를 묶어 같은 Leaf 스위치에 연결한 그룹입니다. GPU0 레일, GPU1 레일처럼 GPU7 레일까지 있습니다.</p>
+  </div>
+  </details>
+  <details>
+    <summary>Q. Rail-optimized가 왜 GPU 클러스터에 유리한가요?</summary>
+  <div class="prose">
+  <p><button class="t" data-t="nccl">NCCL</button> 집단 통신은 주로 서로 다른 서버의 같은 번호 GPU끼리 데이터를 주고받습니다. 같은 번호 GPU의 NIC를 같은 Leaf에 연결하면 이 통신이 Leaf 한 대에서 끝나 Spine을 거치지 않으므로, 지연과 혼잡이 줄어듭니다. 서로 다른 번호 사이 통신은 서버 안 NVLink로 먼저 처리합니다.</p>
+  </div>
+  </details>
+</section>
+
+<section class="ch" id="s3-5">
+  <div class="ch-head"><span class="ch-num">3.5</span><h2>이점</h2></div>
+  <div class="prose"><ul>
+    <li><b>지연을 예측할 수 있습니다:</b> 모든 서버 쌍이 최대 스위치 3개로 같습니다.</li>
+    <li><b>옆으로 늘립니다:</b> 서버가 늘면 Leaf를, 대역폭이 모자라면 Spine을 더합니다.</li>
+    <li><b>장애에 강합니다:</b> Spine 한 대가 고장 나도 대역폭 일부가 줄 뿐 끊기지 않습니다.</li>
+    <li><b>모든 링크를 동시에 씁니다:</b> STP로 막아 두는 링크가 없습니다.</li>
+    <li><b>레일이면 Spine 부하가 줄어듭니다:</b> 같은 번호 GPU 사이 통신이 Leaf 하나에서 끝납니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-6">
+  <div class="ch-head"><span class="ch-num">3.6</span><h2>부재 시 문제</h2></div>
+  <p class="prose">Leaf-Spine 대신 전통 3계층 구조를 쓴다고 가정해 보면, 이런 문제가 생깁니다.</p>
+  <div class="prose"><ul>
+    <li>STP 때문에 링크 일부가 대기 상태로 남아 대역폭이 버려집니다.</li>
+    <li>서버 위치에 따라 경로 길이가 달라 지연이 들쭉날쭉하고, Aggregation 계층에서 병목이 생깁니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-7">
+  <div class="ch-head"><span class="ch-num">3.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>Spine 포트 수가 규모를 묶습니다:</b> Leaf 수는 Spine 포트 수를 넘을 수 없습니다. 그 이상은 3단 Super-spine이 필요합니다.</li>
+    <li><b>케이블이 많습니다:</b> 모든 Leaf와 모든 Spine을 이어야 해서 케이블과 광모듈 수가 많고, 배선 관리가 부담입니다.</li>
+    <li><b>ECMP는 흐름 단위입니다:</b> 큰 흐름 몇 개가 같은 Spine에 몰리면 혼잡이 생깁니다. AI 트래픽의 대표적인 문제입니다.</li>
+  </ul></div>
+  <details>
+    <summary>Q. ECMP가 AI 트래픽에서 문제가 되는 이유는?</summary>
+  <div class="prose">
+  <p>ECMP는 흐름 단위 해시로 경로를 나누는데, AI 집단 통신은 소수의 큰 흐름이라 같은 경로에 몰리기 쉽습니다. 그러면 일부 링크만 혼잡해지고, 가장 느린 흐름이 전체 속도를 정합니다.</p>
+  </div>
+  </details>
+</section>
+
+<section class="ch" id="s3-8">
+  <div class="ch-head"><span class="ch-num">3.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. 3단 Leaf-Spine-Super-spine</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> Spine 위에 한 층을 더 둡니다.</li>
+    <li><b>해결하는 단점:</b> Spine 포트 수가 묶는 규모 한계를 넘습니다.</li>
+  </ul></div>
+  <h3>2. Rail-optimized Leaf 배치</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> Leaf를 GPU 번호, 즉 레일 기준으로 나눕니다.</li>
+    <li><b>해결하는 단점:</b> 같은 레일 통신이 Leaf에서 끝나 Spine 혼잡이 줄어듭니다.</li>
+  </ul></div>
+  <h3>3. 적응형 라우팅과 패킷 스프레이</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 흐름 대신 패킷 단위로 Spine에 나눠 보냅니다. Spectrum-X와 Ultra Ethernet이 이 방식입니다.</li>
+    <li><b>해결하는 단점:</b> ECMP 해시 충돌로 생기는 혼잡을 줄입니다.</li>
+  </ul></div>
+  <h3>4. 섀시형 스케줄드 패브릭</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> Broadcom Jericho 기반 장비처럼 데이터를 작은 셀로 잘라 모든 경로에 고르게 뿌립니다.</li>
+    <li><b>해결하는 단점:</b> 경로 쏠림에 의한 혼잡을 없앱니다.</li>
+  </ul></div>
+  <h3>5. 토폴로지 인식 배치</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 노드에 Leaf, Spine 블록, 레일 정보를 라벨로 붙이고, 스케줄러가 분산 학습 Pod를 같은 그룹에 모읍니다. 라벨 기반 배치는 16회차, <button class="t" data-t="kueue">Kueue</button>는 15회차에서 다룹니다.</li>
+    <li><b>해결하는 단점:</b> Pod가 여러 Leaf에 흩어져 hop 수와 혼잡이 늘어나는 문제를 줄입니다.</li>
+  </ul></div>
+  <details>
+    <summary>Q. 분산 학습 Pod가 여러 Leaf에 흩어지면 얼마나 느려지나요?</summary>
+  <div class="prose">
+  <p>non-blocking 망이면 이론상 대역폭은 같습니다. 하지만 hop 수와 ECMP 혼잡 가능성이 늘어 꼬리 지연이 커집니다. 규모가 클수록 영향이 커서, 가능하면 같은 Leaf나 같은 Spine 블록에 모아 배치합니다.</p>
+  </div>
+  </details>
+</section>
+
+<section class="ch" id="s3-9">
+  <div class="ch-head"><span class="ch-num">3.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>항목</th><th>전통 3계층</th><th>Leaf-Spine 2단</th><th>Leaf-Spine-Super-spine 3단</th></tr></thead>
+    <tbody>
+      <tr><td>최대 hop</td><td>위치에 따라 다름</td><td>스위치 3개</td><td>스위치 5개</td></tr>
+      <tr><td>링크 사용</td><td>STP로 일부 차단</td><td>전부 사용, ECMP</td><td>전부 사용</td></tr>
+      <tr><td>규모, 64포트 1:1 기준</td><td>해당 없음</td><td class="num">약 2,048포트</td><td class="num">약 65,536포트</td></tr>
+      <tr><td>적합</td><td>레거시 엔터프라이즈</td><td>중형 AI 클러스터</td><td>대형 AI 클러스터</td></tr>
+      <tr><td>사례</td><td>2000년대 데이터센터</td><td>DGX H100 SuperPOD</td><td>Meta GPU 24,576장 <button class="t" data-t="roce">RoCE</button> 클러스터, 2024</td></tr>
+    </tbody>
+  </table></div>
+  <div class="prose"><ul>
+    <li>Meta는 GPU 3천 장 규모의 AI zone을 2단 Clos로 만들고, 그 위에 집계 계층 ATSW를 두어 AI zone 8개를 GPU 24,576장 클러스터로 묶었습니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>Leaf-Spine은 모든 서버 쌍을 같은 거리로 만들고, Rail-optimized는 GPU 집단 통신 대부분을 Leaf 한 대에서 끝냅니다.</b></div>
+</section>
+
+<section class="ch" id="s3-10">
+  <div class="ch-head"><span class="ch-num">3.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. Spine 한 대가 받는 포트가 늘어납니다</h3>
+  <div class="prose"><ul>
+    <li>NVIDIA는 2025년 3월 Ethernet용 CPO 스위치 Spectrum-X Photonics를 발표했습니다. 최대 512포트급입니다.</li>
+    <li>NVIDIA는 2026년 5월 말 이 스위치가 생산에 들어갔다고 밝혔고, 공급 시점은 2026년 하반기로 안내하고 있습니다. TrendForce는 2026년 7월 일부 파트너에게 출하가 시작됐다고 전했습니다.</li>
+    <li>포트가 많을수록 Spine 한 대가 받는 Leaf가 늘어, 2단으로 더 크게 만들 수 있습니다.</li>
+  </ul></div>
+  <h3>2. Kubernetes가 Leaf와 Spine을 압니다</h3>
+  <div class="prose"><ul>
+    <li>Kueue의 Topology Aware Scheduling은 블록, 랙 같은 계층을 노드 라벨로 적어 두고, 워크로드를 같은 계층 안에 모아 배치합니다.</li>
+    <li>2025년 9월 Kueue v0.14에서 beta가 되어 기본으로 켜졌습니다. 2025년 11월 v0.15는 Kubeflow Trainer v2와 MultiKueue를 지원했고, 2026년 1월 v0.16은 6만 노드에 걸친 워크로드까지 지원합니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>스위치는 2단으로 더 크게, 스케줄러는 그 2단 구조를 알고 배치하는 쪽으로 함께 움직이고 있습니다.</b></div>
+  <p class="prose">여기까지가 12회차였습니다. 오늘은 서버와 스위치를 잇는 모양을 보는 지표, 위로 갈수록 굵어지는 Fat-tree, 그리고 그걸 구현한 Leaf-Spine과 Rail-optimized를 봤습니다. 다음 13회차에서는 Kubernetes가 GPU를 자원으로 알아보고, 필요한 소프트웨어를 설치하고, 상태를 모니터링하는 방법을 봅니다. Device Plugin, GPU Operator, DCGM Exporter입니다. 오늘 본 토폴로지를 스케줄링에 쓰는 이야기는 15회차에서 다시 만납니다.</p>
+</section>
+
+<section class="ch" id="refs">
+  <div class="ch-head"><span class="ch-num">+</span><h2>참고</h2></div>
+  <div class="prose"><ul>
+    <li><a href="https://docs.nvidia.com/dgx-superpod/reference-architecture-scalable-infrastructure-h100/latest/dgx-superpod-components.html" target="_blank" rel="noopener">NVIDIA DGX SuperPOD H100 — Key Components (rail-optimized full fat-tree, QM9700)</a></li>
+    <li><a href="https://docs.nvidia.com/dgx-superpod/design-guides/dgx-superpod-data-center-design-h100/latest/planning.html" target="_blank" rel="noopener">NVIDIA DGX SuperPOD H100 — Data Center Design (SU 32대, 최대 4 SU)</a></li>
+    <li><a href="https://docs.nvidia.com/dgx-superpod/reference-architecture/scalable-infrastructure-b300-xdr/latest/dgx-superpod-components.html" target="_blank" rel="noopener">NVIDIA DGX SuperPOD B300 — Key Components (twin-plane fat-tree)</a></li>
+    <li><a href="https://dl.acm.org/doi/10.1145/1402958.1402967" target="_blank" rel="noopener">A Scalable, Commodity Data Center Network Architecture (Al-Fares et al., SIGCOMM 2008)</a></li>
+    <li><a href="https://arxiv.org/abs/2307.12169v5" target="_blank" rel="noopener">Rail-only: A Low-Cost High-Performance Network for Training LLMs (arXiv 2307.12169)</a></li>
+    <li><a href="https://engineering.fb.com/2024/08/05/data-center-engineering/roce-network-distributed-ai-training-at-scale/" target="_blank" rel="noopener">RDMA over Ethernet for Distributed AI Training at Meta Scale (Meta, 2024)</a></li>
+    <li><a href="https://arxiv.org/abs/2605.21187" target="_blank" rel="noopener">High-speed Networking for Giga-Scale AI Factories (arXiv 2605.21187, 2026)</a></li>
+    <li><a href="https://www.delltechnologies.com/asset/en-my/products/networking/technical-support/nvidia-quantum-x800-q3200-ra-and-q3400-ra-datasheet.pdf" target="_blank" rel="noopener">NVIDIA Quantum-X800 Q3400 데이터시트 (2단 fat-tree 10,368 NIC)</a></li>
+    <li><a href="https://convergedigest.com/nvidia-debuts-spectrum-x-and-quantum-x-photonics-switches/" target="_blank" rel="noopener">NVIDIA Spectrum-X / Quantum-X Photonics 발표 (Converge Digest, 2025)</a></li>
+    <li><a href="https://nvidia.com/en-us/networking/products/silicon-photonics" target="_blank" rel="noopener">NVIDIA Silicon Photonics 제품 페이지</a></li>
+    <li><a href="https://developer.nvidia.com/blog/scaling-ai-factories-with-co-packaged-optics-for-better-power-efficiency" target="_blank" rel="noopener">Scaling AI Factories with Co-Packaged Optics (NVIDIA)</a></li>
+    <li><a href="https://wccftech.com/nvidia-first-co-packaged-optics-switch-lands-at-lambda-cutting-3kw-per-rack/amp/" target="_blank" rel="noopener">NVIDIA's First CPO Switch Lands at Lambda (Wccftech, 2026)</a></li>
+    <li><a href="https://www.trendforce.com/presscenter/news/20260727-13151.html" target="_blank" rel="noopener">TrendForce — CPO 스위치 출하 (2026.7)</a></li>
+    <li><a href="https://kueue.sigs.k8s.io/docs/concepts/topology_aware_scheduling/" target="_blank" rel="noopener">Kueue Topology Aware Scheduling 문서</a></li>
+    <li><a href="https://groups.google.com/a/kubernetes.io/g/wg-batch/c/P9GZdhAzuTg" target="_blank" rel="noopener">Kueue v0.14.0 릴리스 (TAS beta, 2025.9)</a></li>
+    <li><a href="https://groups.google.com/a/kubernetes.io/g/wg-batch/c/QOxCUD__zGI" target="_blank" rel="noopener">Kueue v0.16.0 릴리스 (2026.1)</a></li>
+  </ul></div>
+</section>
+
+<nav class="pager" id="pager" data-no="12" aria-label="회차 이동"></nav>
+</main>
+</div>
+
+<footer class="site"><div class="container">자료의 오류나 보충할 내용은 <a href="https://github.com/designerbohyun/domain-study/issues">GitHub 이슈</a>로 알려 주세요.</div></footer>
+<script src="../assets/terms.js"></script>
+<script src="../assets/sessions.js"></script>
+<script src="../assets/site.js"></script>
+<script src="12.js"></script>
+<script type="module">
+import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.esm.min.mjs";
+const t = document.documentElement.getAttribute("data-theme");
+const dark = t ? t === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+mermaid.initialize({ startOnLoad: false, theme: dark ? "dark" : "neutral", fontFamily: "inherit" });
+// ponytail: theme set at load; toggling theme needs a reload to recolor diagrams
+let i = 0;
+for (const el of document.querySelectorAll("pre.mermaid")) {
+  const { svg } = await mermaid.render("mmd" + i++, el.textContent);
+  const box = document.createElement("div");
+  box.className = "mmd";
+  box.innerHTML = svg;
+  el.replaceWith(box);
+}
+</script>
+</body>
+</html>

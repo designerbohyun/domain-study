@@ -1,0 +1,810 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>11회차 · InfiniBand, Ethernet, RoCE, RDMA, NIC, HCA · 도메인 스터디</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.0.6/css/pico.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="../assets/site.css">
+<script>try{var t=localStorage.getItem("theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+</head>
+<body data-root="..">
+<header class="site"><nav class="container">
+  <ul><li><a class="brand" href="../">도메인 스터디</a></li></ul>
+  <ul><li><a href="../">스터디 목차</a></li><li><a href="../structure.html">구조도</a></li><li><a href="../glossary.html">용어 사전</a></li></ul>
+</nav></header>
+
+<div class="container doc">
+<aside class="toc"><details open><summary>이 회차 목차</summary><ol id="toc"></ol></details></aside>
+<main>
+<header class="doc-head">
+  <div class="crumb"><a href="../">스터디 목차</a> / 서버 간 통신 / 11회차</div>
+  <h1>11회차 · InfiniBand, Ethernet, RoCE, RDMA, NIC, HCA</h1>
+  <p>지난 10회차에서는 여러 GPU가 데이터를 함께 합치고 나누는 집단 통신, 그리고 그 일을 맡는 <button class="t" data-t="nccl">NCCL</button>을 봤습니다. NCCL은 서버 안에서는 NVLink로, 서버 밖으로는 네트워크로 데이터를 보냈습니다. 오늘은 그 서버 밖의 길, 서버와 서버 사이 통신 안으로 들어가 보겠습니다.</p><p>오늘은 네 가지를 봅니다. 첫째는 상대 서버의 CPU를 거치지 않고 메모리에 직접 읽고 쓰는 통신 방식, <b><button class="t" data-t="rdma">RDMA</button></b>입니다. 둘째는 처음부터 RDMA를 위해 만든 전용 망 <b><button class="t" data-t="infiniband">InfiniBand</button></b>와, 그 망에서 서버 쪽 카드를 부르는 이름 <b><button class="t" data-t="hca">HCA</button></b>입니다. 셋째는 일반 <b><button class="t" data-t="ethernet">Ethernet</button></b> 위에서 RDMA를 돌리는 <b><button class="t" data-t="roce">RoCE</button></b>입니다. 넷째는 서버에 꽂혀 이 모든 통신을 실제로 수행하는 카드, <b><button class="t" data-t="nic">NIC</button></b>입니다.</p>
+  <div class="flow" aria-label="주제별 진행 순서">
+    <span><b>1</b>정의</span><span><b>2</b>등장 배경</span><span><b>3</b>구조</span><span><b>4</b>작동 방식</span><span><b>5</b>이점</span><span><b>6</b>부재 시 문제</span><span><b>7</b>단점</span><span><b>8</b>대안 기술</span><span><b>9</b>대안과의 비교</span><span><b>10</b>최신 트렌드</span>
+  </div>
+</header>
+
+<section class="ch" id="s0">
+  <div class="ch-head"><span class="ch-num">0</span><h2>서버와 서버 사이 한눈에 보기</h2></div>
+  <figure class="fig"><pre class="mermaid">flowchart LR
+  subgraph A["서버 A (DGX H100)"]
+    GA["GPU 메모리&lt;br&gt;H100"] --&gt;|"PCIe Gen5"| NA["ConnectX-7&lt;br&gt;포트당 400Gb/s"]
+  end
+  subgraph B["서버 B (DGX H100)"]
+    NB["ConnectX-7"] --&gt;|"PCIe Gen5"| GB["GPU 메모리&lt;br&gt;H100"]
+  end
+  NA --&gt;|"InfiniBand 또는 RoCE v2&lt;br&gt;RDMA: 커널과 상대 CPU를 거치지 않음"| SW["스위치"]
+  SW --&gt; NB</pre></figure>
+  <div class="tbl"><table>
+    <thead><tr><th>주제</th><th>한 줄 요약</th><th>이어지는 회차</th></tr></thead>
+    <tbody>
+      <tr><td>RDMA</td><td>NIC이 상대 서버 메모리에 직접 읽고 씀</td><td>8회차 DMA, 9회차 <button class="t" data-t="gpudirect-rdma">GPUDirect RDMA</button></td></tr>
+      <tr><td>InfiniBand, HCA</td><td>RDMA와 무손실을 전제로 만든 전용 망, 서버 쪽 카드는 HCA</td><td>10회차 NCCL의 서버 간 경로</td></tr>
+      <tr><td>Ethernet, RoCE</td><td>일반 Ethernet 위의 RDMA, 무손실 설정이 핵심</td><td>12회차 Leaf-Spine</td></tr>
+      <tr><td>NIC</td><td>서버를 망에 잇는 카드, SuperNIC과 DPU로 나뉨</td><td>8회차 NUMA, 13회차 Device Plugin</td></tr>
+    </tbody>
+  </table></div>
+  <p class="prose">※ 기준 제품은 8회차에 이어 DGX H100입니다. H100 SXM 8장에 ConnectX-7 NIC 8개를 GPU마다 하나씩 짝지어 붙이고, NIC 하나는 NDR InfiniBand 포트당 400Gb/s입니다. 여기에 스토리지와 관리용으로 BlueField-3 <button class="t" data-t="dpu">DPU</button> 2개가 더 들어갑니다. 네트워크 속도는 Gb/s, 즉 초당 기가비트로 적습니다. 400Gb/s는 바이트로 바꾸면 초당 50GB, 즉 50GB/s입니다.</p>
+</section>
+
+<!-- ============ PART 1 ============ -->
+<div class="part" id="p1">
+  <div class="pk">PART 1</div>
+  <h2>RDMA (Remote Direct Memory Access)</h2>
+  <p>먼저 서버 사이 통신의 방식부터 보겠습니다. 8회차에서 본 DMA를 서버 밖으로 넓힌 것이 RDMA입니다.</p>
+</div>
+
+<section class="ch" id="s1-1">
+  <div class="ch-head"><span class="ch-num">1.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="rdma">RDMA</button>, Remote Direct Memory Access는 <b>네트워크 카드가 상대 서버의 메모리에 직접 읽고 쓰는 통신 방식</b>입니다. 운영체제 커널과 상대 CPU를 거치지 않아서 지연과 CPU 사용이 매우 낮습니다.</p>
+  <p class="prose">핵심 특성은 세 가지입니다.</p>
+  <div class="prose"><ul>
+    <li><b><button class="t" data-t="kernelbypass">Kernel bypass</button>, 커널 우회:</b> 앱이 커널을 거치지 않고 NIC에 직접 작업을 요청합니다.</li>
+    <li><b>Zero-copy, 복사 없음:</b> 앱 메모리와 NIC 사이에 중간 복사가 없습니다.</li>
+    <li><b>CPU offload, CPU 부담 덜기:</b> 패킷 처리와 재전송을 NIC 하드웨어가 합니다. 상대 CPU는 아예 끼어들지 않는 연산도 있습니다. 이걸 one-sided, 한쪽만 참여하는 연산이라고 합니다.</li>
+  </ul></div>
+  <details>
+    <summary>Q. RDMA의 세 가지 핵심 특성은 무엇인가요?</summary>
+  <div class="prose">
+  <p>Kernel bypass, Zero-copy, CPU offload입니다. 커널을 거치지 않고, 중간 복사가 없고, 상대 CPU가 끼어들지 않습니다.</p>
+  </div>
+  </details>
+</section>
+
+<section class="ch" id="s1-2">
+  <div class="ch-head"><span class="ch-num">1.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li>1990년대 후반 HPC 클러스터에서는 TCP 통신을 처리하는 비용이 병목이었습니다. <button class="t" data-t="lat">지연</button>이 수십 μs였고, 통신하는 동안 CPU가 묶였습니다.</li>
+    <li>데이터가 앱에서 커널로, 커널에서 NIC으로 여러 번 복사되고, 패킷마다 CPU가 손을 댔기 때문입니다.</li>
+  </ul></div>
+  <div class="callout idea"><span class="say">"그럼 네트워크 카드가 상대 서버의 메모리에 직접 써 넣게 하자!"</span>그래서 등장한 것이 바로 <b>RDMA</b>입니다.<ul><li>1999년부터 2000년 사이 InfiniBand 표준과 함께 RDMA 개념이 자리 잡았습니다. InfiniBand는 PART 2에서 봅니다.</li><li>이후 Ethernet 위로도 넓어졌습니다. TCP 위의 <button class="t" data-t="iwarp">iWARP</button>, 그리고 PART 3에서 볼 RoCE입니다.</li><li>AI 분산 학습에서 GPU 한 장이 수백 Gb/s를 주고받게 되면서, RDMA는 사실상 필수 기술이 됐습니다.</li></ul></div>
+</section>
+
+<section class="ch" id="s1-3">
+  <div class="ch-head"><span class="ch-num">1.3</span><h2>구조</h2></div>
+  <h3>1. RDMA의 구성 요소</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>구성</th><th>하는 일</th><th>비고</th></tr></thead>
+    <tbody>
+      <tr><td>Verbs API</td><td>RDMA 프로그래밍 인터페이스</td><td>libibverbs</td></tr>
+      <tr><td><button class="t" data-t="qp">Queue Pair, QP</button></td><td>송신 큐와 수신 큐 한 쌍, 연결의 단위</td><td>연결마다 하나</td></tr>
+      <tr><td>Completion Queue, CQ</td><td>작업이 끝났다고 알리는 큐</td><td>앱이 폴링으로 확인</td></tr>
+      <tr><td>Memory Region, MR</td><td>미리 등록한 메모리, NIC은 여기만 접근</td><td>키 lkey, rkey로 권한 관리</td></tr>
+    </tbody>
+  </table></div>
+  <div class="prose"><ul>
+    <li>메모리를 등록할 때 그 영역을 고정합니다. 이걸 pinning이라고 합니다. 8회차에서 DMA에 Pinned Memory가 필요했던 것과 같은 이유입니다.</li>
+  </ul></div>
+  <h3>2. 연산의 종류</h3>
+  <div class="prose"><ul>
+    <li><b>Send와 Recv:</b> 양쪽이 모두 참여합니다. 받는 쪽이 미리 받을 자리를 마련해 둡니다.</li>
+    <li><b>RDMA Write와 RDMA Read:</b> 한쪽만 참여합니다. 상대 CPU는 모릅니다.</li>
+    <li><b>Atomic:</b> 상대 메모리의 값을 한 번에 읽고 바꿉니다.</li>
+  </ul></div>
+  <h3>3. RDMA를 실어 나르는 망</h3>
+  <div class="prose"><ul>
+    <li><b>InfiniBand:</b> 처음부터 RDMA용으로 설계한 전용 망입니다. PART 2에서 봅니다.</li>
+    <li><b>RoCE v2:</b> 일반 Ethernet과 IP 위에 RDMA 패킷을 UDP로 실어 보냅니다. 무손실 설정이 필요합니다. PART 3에서 봅니다.</li>
+    <li><b>iWARP:</b> TCP 위의 RDMA입니다. AI 클러스터에서는 드뭅니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-4">
+  <div class="ch-head"><span class="ch-num">1.4</span><h2>작동 방식</h2></div>
+  <p class="prose">먼저 두 방식의 경로를 나란히 보겠습니다.</p>
+  <figure class="fig">
+    <div class="fig-title">일반 TCP 통신과 RDMA 통신의 데이터 경로</div>
+    <div class="scroll-x"><svg id="pathSvg" viewBox="0 0 640 250" width="100%" style="min-width:560px" role="img" aria-label="TCP는 앱, 커널, NIC, 네트워크, NIC, 커널, 앱을 지나며 복사가 두 번 일어나고, RDMA는 메모리, NIC, 네트워크, NIC, 상대 메모리로 바로 갑니다."></svg></div>
+    <div class="legend"><span><i class="sw" style="background:var(--mem)"></i>메모리 (앱, GPU)</span><span><i class="sw" style="background:var(--tensor)"></i>커널, CPU가 처리</span><span><i class="sw" style="background:var(--accent)"></i>NIC (HCA)</span><span><i class="sw" style="background:var(--idle)"></i>네트워크</span></div>
+    <figcaption>TCP는 CPU가 패킷을 처리하고 메모리 복사를 여러 번 해서 지연이 수십 μs입니다. RDMA는 커널 우회, 복사 없음, 상대 CPU 개입 없음으로 지연이 수 μs 이하입니다.</figcaption>
+  </figure>
+  <p class="prose">RDMA Write 한 번을 따라가 보겠습니다.</p>
+  <div class="prose"><ol>
+    <li><b>준비:</b> 양쪽이 메모리 영역을 등록하고, QP를 만들어 서로 연결합니다.</li>
+    <li><b>요청:</b> 보내는 쪽 앱이 "내 메모리 주소 X를 상대의 주소 Y에 써라"라는 작업 요청을 송신 큐에 넣습니다. 이 요청을 WR, Work Request라고 합니다.</li>
+    <li><b>전송:</b> NIC이 메모리에서 데이터를 직접 읽어 패킷으로 만들어 보냅니다. 상대 NIC은 받은 데이터를 상대 메모리 주소 Y에 직접 씁니다.</li>
+    <li><b>완료:</b> 끝나면 CQ에 완료 항목이 들어오고, 앱이 폴링으로 확인합니다.</li>
+  </ol></div>
+  <p class="prose">GPU 메모리를 메모리 영역으로 등록하면, NIC이 GPU 메모리와 네트워크 사이를 직접 오갑니다. 이것이 9회차에서 본 <button class="t" data-t="gpudirect-rdma">GPUDirect RDMA</button>입니다. 8회차에서 본 BAR1 창이 이때 쓰입니다.</p>
+  <details>
+    <summary>Q. RDMA가 켜져 있지 않으면 학습이 아예 안 되나요?</summary>
+  <div class="prose">
+  <p>아닙니다. NCCL이 TCP 소켓으로 대신 보내서 동작은 합니다. 하지만 서버 사이 통신이 크게 느려집니다. NCCL 로그에 <code>NET/Socket</code>이 보이면 RDMA를 쓰지 않는 상태입니다.</p>
+  </div>
+  </details>
+</section>
+
+<section class="ch" id="s1-5">
+  <div class="ch-head"><span class="ch-num">1.5</span><h2>이점</h2></div>
+  <div class="prose"><ul>
+    <li><b>지연이 짧습니다:</b> TCP는 수십 μs, RDMA는 1에서 2μs 수준입니다. InfiniBand에서는 1μs 안팎입니다.</li>
+    <li><b><button class="t" data-t="bandwidth">대역폭</button>을 끝까지 씁니다:</b> 중간 복사가 없어서 링크 속도에 가깝게 보냅니다.</li>
+    <li><b>CPU가 계산에 집중합니다:</b> 통신이 CPU를 거의 쓰지 않아서, 8회차에서 본 CPU 병목이 줄어듭니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-6">
+  <div class="ch-head"><span class="ch-num">1.6</span><h2>부재 시 문제</h2></div>
+  <p class="prose">RDMA가 없다고 가정해 보면, 이런 문제가 생깁니다.</p>
+  <div class="prose"><ul>
+    <li>서버 사이 <button class="t" data-t="allreduce">AllReduce</button>가 TCP로 돌아갑니다. NCCL이 소켓 방식으로 떨어져 대역폭이 크게 줄고, 서버를 늘려도 학습 속도가 잘 늘지 않습니다. AllReduce는 10회차에서 봤습니다.</li>
+    <li>CPU가 패킷 처리에 묶여서, 데이터 전처리 같은 다른 일이 느려집니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-7">
+  <div class="ch-head"><span class="ch-num">1.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>프로그래밍과 설정이 복잡합니다:</b> Verbs, 메모리 등록, 드라이버 묶음인 <button class="t" data-t="ofed">OFED</button>까지 맞춰야 합니다.</li>
+    <li><b>메모리 등록에 비용이 듭니다:</b> 등록하는 데 시간이 걸리고, 등록할 수 있는 양도 <code>ulimit memlock</code>으로 제한됩니다.</li>
+    <li><b>패킷 손실에 아주 약합니다:</b> Ethernet 위에서는 손실이 없는 망을 따로 구성해야 합니다. PART 3에서 봅니다.</li>
+    <li><b>컨테이너에서 손이 갑니다:</b> RDMA 장치를 컨테이너에 보여 주고, <code>IPC_LOCK</code> 권한을 줘야 합니다. 1.8에서 봅니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-8">
+  <div class="ch-head"><span class="ch-num">1.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. UCX와 libfabric</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> RDMA를 한 겹 감싸서 다루기 쉽게 만든 통신 프레임워크입니다. <button class="t" data-t="ucx">UCX와 libfabric</button>이 대표입니다.</li>
+    <li><b>해결하는 단점:</b> Verbs를 직접 다루는 복잡함을 줄입니다.</li>
+  </ul></div>
+  <h3>2. NCCL</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 사용자는 RDMA를 직접 다루지 않고, NCCL이 RDMA 연결과 전송을 맡습니다. 10회차에서 봤습니다.</li>
+    <li><b>해결하는 단점:</b> AI 학습에서 RDMA 프로그래밍 부담을 없앱니다.</li>
+  </ul></div>
+  <h3>3. Kubernetes Network Operator</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> NVIDIA Network Operator가 드라이버와 함께 SR-IOV 또는 RDMA Shared Device Plugin을 설치해, 컨테이너에 RDMA 장치를 자동으로 내줍니다. Device Plugin은 13회차에서 다룹니다.</li>
+    <li><b>해결하는 단점:</b> 컨테이너에서 장치를 보여 주고 권한을 주는 일을 자동화합니다.</li>
+  </ul></div>
+  <h3>4. UEC의 UET</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> <button class="t" data-t="uec">Ultra Ethernet Consortium</button>이 만든 Ethernet용 새 RDMA 전송 계층, Ultra Ethernet Transport입니다. 패킷 손실을 견디고 여러 경로를 함께 씁니다.</li>
+    <li><b>해결하는 단점:</b> 무손실 망에 기대는 약점을 풉니다. 1.10에서 봅니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-9">
+  <div class="ch-head"><span class="ch-num">1.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>항목</th><th>TCP/IP</th><th>RDMA (InfiniBand, RoCE)</th><th>UEC UET</th></tr></thead>
+    <tbody>
+      <tr><td>지연</td><td>수십 μs</td><td>약 1~2μs</td><td>RDMA급 목표</td></tr>
+      <tr><td>CPU 사용</td><td>높음</td><td>매우 낮음</td><td>매우 낮음</td></tr>
+      <tr><td>손실이 있는 망</td><td>강함, 재전송</td><td>약함, 무손실 필요</td><td>손실 허용 설계</td></tr>
+      <tr><td>성숙도</td><td>가장 높음</td><td>높음</td><td>초기, 2025년 6월 사양 1.0</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>RDMA는 커널도, 복사도, 상대 CPU도 거치지 않고 NIC이 메모리에 직접 씁니다.</b> 그래서 다중 서버 학습에서는 사실상 필수입니다.</div>
+</section>
+
+<section class="ch" id="s1-10">
+  <div class="ch-head"><span class="ch-num">1.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. Ethernet용 새 RDMA 표준이 나왔습니다</h3>
+  <div class="prose"><ul>
+    <li>2025년 6월 11일 Ultra Ethernet Consortium이 <button class="t" data-t="uec">UEC</button> 사양 1.0을 공개했습니다. 9월에는 1.0.1로 다듬었습니다.</li>
+    <li>앱에서 libfabric API를 거쳐 새 전송 계층 UET까지, 그리고 링크와 물리층 개선까지 한 묶음으로 정의합니다.</li>
+    <li>쓰임새에 따라 AI Base, AI Full, HPC 세 가지 프로파일로 나눕니다.</li>
+  </ul></div>
+  <h3>2. 손실을 견디는 RDMA 제품이 나옵니다</h3>
+  <div class="prose"><ul>
+    <li>2025년 10월 Broadcom은 UEC 사양을 따르는 800G NIC, Thor Ultra를 발표했습니다.</li>
+    <li>패킷 단위로 여러 경로에 나눠 보내고, 순서가 바뀌어 도착해도 받아 주고, 잃어버린 패킷만 골라 다시 보냅니다. 무손실 망에 기대던 RoCE의 약점을 정면으로 겨냥한 기능입니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>RDMA는 무손실 망을 전제로 하던 방식에서, 손실을 견디는 방식으로 넓어지고 있습니다.</b></div>
+</section>
+
+<!-- ============ PART 2 ============ -->
+<div class="part" id="p2">
+  <div class="pk">PART 2</div>
+  <h2>InfiniBand와 HCA (Host Channel Adapter)</h2>
+  <p>여기까지가 통신 방식, RDMA였습니다. 이제 그 RDMA를 처음부터 전제로 만든 망, InfiniBand로 넘어가겠습니다. InfiniBand에서 서버 쪽 카드를 부르는 이름인 HCA도 여기서 함께 봅니다.</p>
+</div>
+
+<section class="ch" id="s2-1">
+  <div class="ch-head"><span class="ch-num">2.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="infiniband">InfiniBand</button>는 <b>처음부터 RDMA, 짧은 지연, 패킷 손실 없음을 목표로 설계한 고성능 전용 네트워크 표준</b>입니다. 대형 AI와 HPC 클러스터에서 대표적으로 쓰는 망입니다.</p>
+  <div class="prose"><ul>
+    <li>표준은 IBTA, InfiniBand Trade Association이 정합니다. 지금 장비는 사실상 NVIDIA, 예전의 Mellanox가 공급합니다.</li>
+    <li>구성 요소는 서버 카드인 HCA, InfiniBand 스위치, 망 전체 경로를 관리하는 Subnet Manager, 그리고 케이블입니다.</li>
+  </ul></div>
+  <p class="prose"><b>InfiniBand에서는 NIC을 HCA라고 부릅니다.</b></p>
+  <div class="prose"><ul>
+    <li><button class="t" data-t="hca">HCA</button>, Host Channel Adapter는 서버, 즉 Host 쪽 채널 어댑터라는 뜻입니다. 스토리지 같은 장치 쪽 어댑터는 TCA, Target Channel Adapter라고 부릅니다.</li>
+    <li>실무에서는 같은 NVIDIA ConnectX 카드를 InfiniBand 모드로 쓰면 HCA, Ethernet 모드로 쓰면 NIC이라고 부르는 경우가 많습니다. 포트마다 두 모드를 바꿀 수 있는 카드를 <button class="t" data-t="vpi">VPI</button> 카드라고 합니다.</li>
+    <li>NCCL 환경 변수 <code>NCCL_IB_HCA</code>의 HCA는 RoCE NIC까지 포함한 RDMA 장치 전체를 가리킵니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-2">
+  <div class="ch-head"><span class="ch-num">2.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li>1999년 PCI 다음 세대의 I/O와 서버 연결 표준을 목표로 Intel, IBM 등이 연합했고, 2000년 1.0 사양이 나왔습니다.</li>
+    <li>메인프레임의 채널 기반 I/O를 본떠 설계해서, 어댑터 이름도 Channel Adapter가 됐습니다.</li>
+    <li>범용 I/O 표준으로는 자리 잡지 못했지만, 지연과 대역폭이 중요한 <button class="t" data-t="hpc">HPC</button>에서 살아남았습니다.</li>
+  </ul></div>
+  <div class="callout idea"><span class="say">"그럼 처음부터 RDMA와 무손실을 전제로 한 망을 따로 깔자!"</span>그래서 등장한 것이 바로 <b>InfiniBand</b>입니다.<ul><li>2000년 InfiniBand 1.0 사양이 나왔습니다.</li><li>2019년 NVIDIA가 Mellanox 인수를 발표했습니다. 인수 금액은 약 69억 달러입니다. 이후 InfiniBand는 NVIDIA AI 인프라의 핵심이 됐습니다.</li></ul></div>
+</section>
+
+<section class="ch" id="s2-3">
+  <div class="ch-head"><span class="ch-num">2.3</span><h2>구조</h2></div>
+  <h3>1. 구성 요소</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>구성</th><th>하는 일</th><th>비고</th></tr></thead>
+    <tbody>
+      <tr><td>HCA</td><td>서버를 InfiniBand 망에 연결, RDMA 처리</td><td>ConnectX-7, 리눅스에서 <code>mlx5_0</code> 같은 이름</td></tr>
+      <tr><td>InfiniBand 스위치</td><td>HCA 사이 패킷 전달</td><td>Quantum-2, NDR 세대</td></tr>
+      <tr><td><button class="t" data-t="subnetmgr">Subnet Manager</button></td><td>포트마다 주소 부여, 경로 계산과 배포</td><td>OpenSM 또는 NVIDIA UFM</td></tr>
+      <tr><td>케이블</td><td>구리 DAC 또는 광</td><td>거리에 따라 선택</td></tr>
+    </tbody>
+  </table></div>
+  <h3>2. 세대</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>세대</th><th>포트 속도, 4x 링크</th><th>시기</th><th>대표 장비</th></tr></thead>
+    <tbody>
+      <tr><td>EDR</td><td class="num">100Gb/s</td><td>2014</td><td>ConnectX-4</td></tr>
+      <tr><td>HDR</td><td class="num">200Gb/s</td><td>2018</td><td>ConnectX-6, Quantum</td></tr>
+      <tr><td>NDR</td><td class="num">400Gb/s</td><td>2021</td><td>ConnectX-7, Quantum-2, DGX H100</td></tr>
+      <tr><td>XDR</td><td class="num">800Gb/s</td><td>2024~</td><td>ConnectX-8, Quantum-X800</td></tr>
+    </tbody>
+  </table></div>
+  <h3>3. 무손실과 AI 가속 기능</h3>
+  <div class="prose"><ul>
+    <li><b>크레딧 기반 흐름 제어:</b> 받는 쪽 버퍼에 여유, 즉 크레딧이 있을 때만 보냅니다. 그래서 설계상 패킷이 버려지지 않습니다.</li>
+    <li><b><button class="t" data-t="sharp">SHARP</button>:</b> 스위치 안에서 AllReduce 합산을 합니다. 이걸 in-network computing이라고 합니다. 10회차에서 이름을 봤습니다.</li>
+    <li><b>Adaptive Routing, 적응형 라우팅:</b> 혼잡한 경로를 피해 패킷을 나눠 보냅니다.</li>
+  </ul></div>
+  <h3>4. HCA 안쪽</h3>
+  <div class="prose"><ul>
+    <li>RDMA 엔진이 QP와 CQ를 처리하고, 메모리 변환 표가 등록된 메모리 주소를 실제 물리 주소로 바꿉니다. 여기에 PCIe 인터페이스와 InfiniBand 포트가 붙습니다.</li>
+    <li>포트마다 두 가지 주소를 가집니다. Subnet Manager가 정해 주는 LID, 그리고 하드웨어마다 고유한 GUID입니다.</li>
+  </ul></div>
+  <div class="tbl"><table>
+    <thead><tr><th>용어</th><th>쓰이는 망</th><th>장치 이름 예</th><th>주소</th></tr></thead>
+    <tbody>
+      <tr><td>HCA</td><td>InfiniBand</td><td>mlx5_0, link_layer: InfiniBand</td><td>LID, GUID</td></tr>
+      <tr><td>RDMA NIC, RoCE</td><td>Ethernet</td><td>mlx5_0, link_layer: Ethernet</td><td>MAC, IP, GID</td></tr>
+      <tr><td>TCA</td><td>InfiniBand</td><td>스토리지 장치 쪽</td><td>LID</td></tr>
+    </tbody>
+  </table></div>
+  <details>
+    <summary>Q. 서버에 mlx5 장치가 10개인데 NCCL에 다 쓰면 되나요?</summary>
+  <div class="prose">
+  <p>아닙니다. GPU 백엔드용 장치만 <code>NCCL_IB_HCA</code>로 지정해야 합니다. DGX H100이라면 GPU와 짝지은 8개입니다. 스토리지나 관리용 장치까지 섞이면 느린 경로로 트래픽이 가거나 상대 서버와 연결되지 않을 수 있습니다.</p>
+  </div>
+  </details>
+</section>
+
+<section class="ch" id="s2-4">
+  <div class="ch-head"><span class="ch-num">2.4</span><h2>작동 방식</h2></div>
+  <div class="prose"><ol>
+    <li><b>망 탐색:</b> Subnet Manager가 망을 훑어 모든 포트에 <button class="t" data-t="lid">LID</button>를 주고 경로를 계산해 스위치에 배포합니다.</li>
+    <li><b>포트 활성화:</b> HCA 포트는 Subnet Manager에 등록되어야 <code>Active</code> 상태가 됩니다. 그 전에는 <code>Initializing</code>입니다.</li>
+    <li><b>연결과 전송:</b> HCA끼리 QP를 연결하고 데이터를 보냅니다. 1.4에서 본 RDMA 순서와 같습니다.</li>
+    <li><b>무손실 전달:</b> 스위치는 다음 구간에 크레딧이 있을 때만 넘깁니다. 혼잡하면 기다릴 뿐 버리지 않습니다.</li>
+    <li><b>나눠 보내기:</b> NCCL은 <code>NCCL_IB_HCA</code>로 지정된 HCA 포트들에 트래픽을 나눠 보냅니다.</li>
+  </ol></div>
+  <details>
+    <summary>Q. InfiniBand가 패킷을 잃지 않는 이유는 무엇인가요?</summary>
+  <div class="prose">
+  <p>받는 쪽 버퍼에 여유, 즉 크레딧이 있을 때만 보내는 크레딧 기반 흐름 제어 때문입니다. 넘칠 상황이면 보내는 쪽이 기다립니다.</p>
+  </div>
+  </details>
+  <details>
+    <summary>Q. Subnet Manager가 죽으면 어떻게 되나요?</summary>
+  <div class="prose">
+  <p>이미 정해진 경로로 기존 통신은 계속됩니다. 하지만 링크가 바뀌거나 장애가 나면 경로를 다시 계산하지 못해 망이 복구되지 않습니다. 그래서 보통 Master와 Standby로 이중화해서 운영합니다.</p>
+  </div>
+  </details>
+</section>
+
+<section class="ch" id="s2-5">
+  <div class="ch-head"><span class="ch-num">2.5</span><h2>이점</h2></div>
+  <div class="prose"><ul>
+    <li><b>지연이 가장 짧고 손실이 없습니다:</b> 포트 사이 지연이 1μs 미만급이고, 실제로 쓸 수 있는 대역폭도 높습니다.</li>
+    <li><b>AI 집단 통신에 맞춘 기능이 있습니다:</b> SHARP와 <button class="t" data-t="adaptiverouting">적응형 라우팅</button>입니다.</li>
+    <li><b>설치하면 바로 잘 됩니다:</b> 성숙한 RDMA 환경이라 Ethernet의 RoCE보다 튜닝 부담이 적습니다.</li>
+    <li><b>HCA가 전송을 하드웨어로 처리합니다:</b> CPU가 끼어들 일이 거의 없습니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-6">
+  <div class="ch-head"><span class="ch-num">2.6</span><h2>부재 시 문제</h2></div>
+  <p class="prose">InfiniBand가 없다고 가정해 보면, 이런 문제가 생깁니다.</p>
+  <div class="prose"><ul>
+    <li>RoCE 망을 직접 무손실로 튜닝해야 합니다. <button class="t" data-t="pfc">PFC</button>와 ECN 설정을 잘못하면 성능이 급락하거나 망이 멈출 수 있습니다. PART 3에서 봅니다.</li>
+    <li>대형 학습 클러스터에서 지연, 특히 가장 늦게 끝나는 통신의 지연이 커져 확장 효율이 떨어집니다. 이걸 <button class="t" data-t="taillat">꼬리 지연, tail latency</button>라고 합니다.</li>
+    <li>HCA가 없다면 서버는 InfiniBand 망에 아예 참여할 수 없습니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-7">
+  <div class="ch-head"><span class="ch-num">2.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>한 회사에 묶입니다:</b> 스위치, 카드, 케이블, 관리 소프트웨어 대부분이 NVIDIA 제품입니다.</li>
+    <li><b>비싸고 사람이 적습니다:</b> 장비 비용이 높고, 운영해 본 인력이 Ethernet보다 적습니다.</li>
+    <li><b>망을 두 벌 운영합니다:</b> 기존 데이터센터 Ethernet 망, 보안, 관리 도구와 따로 운영해야 합니다.</li>
+    <li><b>InfiniBand만의 운영 지식이 필요합니다:</b> LID, 파티션 키인 <button class="t" data-t="pkey">PKey</button>, Subnet Manager, 포트 상태를 알아야 하고, 펌웨어와 드라이버와 Subnet Manager의 버전 호환도 챙겨야 합니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-8">
+  <div class="ch-head"><span class="ch-num">2.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. Ethernet과 RoCE v2</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 일반 Ethernet 위에서 RDMA를 돌립니다. NVIDIA <button class="t" data-t="spectrumx">Spectrum-X</button>, Broadcom Tomahawk와 Jericho 기반 AI Ethernet이 있습니다. PART 3에서 봅니다.</li>
+    <li><b>해결하는 단점:</b> 한 회사에 묶이는 문제와 망을 두 벌 운영하는 문제를 줄입니다.</li>
+  </ul></div>
+  <h3>2. Ultra Ethernet</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 여러 회사가 함께 만드는 개방형 고성능 Ethernet 표준입니다. 1.10에서 봤습니다.</li>
+    <li><b>해결하는 단점:</b> 벤더 종속을 풉니다.</li>
+  </ul></div>
+  <h3>3. UFM</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> NVIDIA <button class="t" data-t="ufm">Unified Fabric Manager</button>입니다. InfiniBand 망과 HCA의 상태, 오류 카운터를 한곳에서 모니터링하고 장애를 분석합니다.</li>
+    <li><b>해결하는 단점:</b> InfiniBand 운영 부담을 줄입니다.</li>
+  </ul></div>
+  <h3>4. VPI 카드</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 포트마다 InfiniBand와 Ethernet을 바꿔 쓸 수 있는 카드입니다.</li>
+    <li><b>해결하는 단점:</b> 망을 바꿀 때 카드를 다시 사지 않아도 됩니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-9">
+  <div class="ch-head"><span class="ch-num">2.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>항목</th><th>InfiniBand, Quantum</th><th>Spectrum-X, RoCE</th><th>범용 Ethernet과 RoCE</th></tr></thead>
+    <tbody>
+      <tr><td>지연과 꼬리 지연</td><td>가장 짧음</td><td>짧음, 적응형 라우팅과 혼잡 제어</td><td>튜닝에 크게 좌우됨</td></tr>
+      <tr><td>운영 친숙도</td><td>전문 인력 필요</td><td>Ethernet 기반</td><td>가장 높음</td></tr>
+      <tr><td>벤더</td><td>NVIDIA</td><td>NVIDIA</td><td>여러 회사</td></tr>
+      <tr><td>멀티테넌시와 보안</td><td>파티션 키 PKey</td><td>VXLAN 등 Ethernet 기능</td><td>Ethernet 기능</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>InfiniBand는 RDMA와 무손실이 기본으로 들어 있는 망이고, 그 망에서 서버 쪽 NIC을 HCA라고 부릅니다.</b> 대신 장비를 사실상 NVIDIA 한 곳에서 삽니다.</div>
+</section>
+
+<section class="ch" id="s2-10">
+  <div class="ch-head"><span class="ch-num">2.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. 스위치에 광 부품을 함께 넣습니다</h3>
+  <div class="prose"><ul>
+    <li>2025년 3월 NVIDIA는 Quantum-X Photonics를 발표했습니다. 광 변환 부품을 스위치 칩 옆에 함께 패키징한 <button class="t" data-t="cpo">CPO</button>, Co-Packaged Optics 방식의 InfiniBand 스위치입니다.</li>
+    <li>800Gb/s 포트 144개로 모두 115Tb/s이고, 액체로 식힙니다. 2026년 초 출시가 목표였습니다.</li>
+    <li>2026년 6월에는 AI 클라우드 회사 Lambda에 첫 공급이 시작됐다는 보도가 나왔습니다.</li>
+  </ul></div>
+  <h3>2. InfiniBand 수요도 계속 늡니다</h3>
+  <div class="prose"><ul>
+    <li>Dell'Oro는 2025년 2분기에 Blackwell Ultra 출하와 함께 800Gb/s InfiniBand 스위치 판매가 크게 늘었다고 밝혔습니다. 전체 시장에서는 Ethernet이 앞서 있지만, InfiniBand도 줄지 않고 자라는 중입니다. PART 3에서 다시 봅니다.</li>
+  </ul></div>
+  <h3>3. HCA 포트가 하나 죽어도 학습이 멈추지 않게 합니다</h3>
+  <div class="prose"><ul>
+    <li>NCCL 2.29.7은 GPU에 InfiniBand나 RoCE 포트가 여러 개 있을 때, 한 포트에 장애가 나면 다른 포트로 넘기는 기능을 넣었습니다. <code>NCCL_IB_RESILIENCY_PORT_FAILOVER=1</code>로 켭니다.</li>
+    <li>NCCL 2.30.3은 잠깐 끊긴 포트를 다시 살려, 통신 묶음인 communicator를 처음부터 다시 만들지 않고 이어 가게 했습니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>InfiniBand는 더 빠른 광 스위치로, NCCL은 장애를 견디는 쪽으로 함께 나아가고 있습니다.</b></div>
+</section>
+
+<!-- ============ PART 3 ============ -->
+<div class="part" id="p3">
+  <div class="pk">PART 3</div>
+  <h2>Ethernet과 RoCE (RDMA over Converged Ethernet)</h2>
+  <p>여기까지가 RDMA 전용 망, InfiniBand였습니다. 이제 데이터센터 어디에나 깔린 Ethernet 위에서 같은 RDMA를 돌리는 방법, RoCE로 넘어가겠습니다.</p>
+</div>
+
+<section class="ch" id="s3-1">
+  <div class="ch-head"><span class="ch-num">3.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="roce">RoCE</button>, RDMA over Converged Ethernet은 <b>InfiniBand의 RDMA 전송 방식을 Ethernet 위에서 돌리는 기술</b>입니다. 읽을 때는 "로키"라고 읽습니다. 표준은 InfiniBand와 같은 IBTA가 정합니다.</p>
+  <div class="prose"><ul>
+    <li><b>RoCE v1, 2010년:</b> Ethernet 2계층 바로 위에 올립니다. 그래서 같은 서브넷 안에서만 동작합니다.</li>
+    <li><b>RoCE v2, 2014년:</b> UDP와 IP 위에 올립니다. UDP 목적지 포트는 4791입니다. IP 라우팅이 되어서 지금의 표준입니다.</li>
+  </ul></div>
+  <p class="prose">바탕이 되는 <button class="t" data-t="ethernet">Ethernet</button>은 IEEE 802.3 표준의 네트워크이고, 그 위에 IP, TCP, UDP를 얹어 씁니다. AI 클러스터에서 Ethernet은 두 가지 역할을 합니다.</p>
+  <div class="prose"><ul>
+    <li><b>기본 역할:</b> 관리망과 스토리지망입니다.</li>
+    <li><b>GPU 백엔드망:</b> RoCE로 RDMA를 돌려 GPU끼리 통신합니다.</li>
+  </ul></div>
+  <details>
+    <summary>Q. RoCE v1과 v2는 무엇이 다른가요?</summary>
+  <div class="prose">
+  <p>v1은 Ethernet 2계층에서만 동작해서 같은 서브넷 안에서만 씁니다. v2는 UDP와 IP 위에 실어서, 포트 4791을 쓰고 IP 라우팅으로 서브넷을 넘어갈 수 있습니다.</p>
+  </div>
+  </details>
+</section>
+
+<section class="ch" id="s3-2">
+  <div class="ch-head"><span class="ch-num">3.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li>Ethernet은 1973년 제록스 PARC에서 시작해 1983년 IEEE 표준이 됐습니다. 이후 1G, 10G, 100G, 400G, 800G로 빨라지며 데이터센터 표준이 됐습니다.</li>
+    <li>InfiniBand의 RDMA 성능은 탐나지만, InfiniBand 망을 따로 깔고 운영하는 일은 부담이었습니다.</li>
+    <li>데이터센터 Ethernet이 빨라지면서, 컴퓨팅과 스토리지를 하나의 망으로 합치려는 수요가 생겼습니다. 이걸 converged, 수렴된 망이라고 합니다.</li>
+    <li>AI 시대에는 <button class="t" data-t="hyperscaler">하이퍼스케일러</button>들이 InfiniBand 종속과 비용을 피하려고 Ethernet 기반 AI 망을 택했습니다.</li>
+  </ul></div>
+  <div class="callout idea"><span class="say">"그럼 이미 깔린 Ethernet 위에서 InfiniBand의 RDMA를 그대로 돌리자!"</span>그래서 등장한 것이 바로 <b>RoCE</b>입니다.<ul><li>2010년 RoCE v1이 나왔고, 2014년 IP 라우팅이 되는 RoCE v2가 나왔습니다.</li></ul></div>
+</section>
+
+<section class="ch" id="s3-3">
+  <div class="ch-head"><span class="ch-num">3.3</span><h2>구조</h2></div>
+  <h3>1. 계층</h3>
+  <div class="prose"><ul>
+    <li>RDMA Verbs와 InfiniBand 전송 계층은 그대로 둡니다.</li>
+    <li>그 아래 링크 계층과 네트워크 계층만 Ethernet, IP, UDP로 바꿉니다.</li>
+  </ul></div>
+  <h3>2. 무손실을 만드는 장치</h3>
+  <p class="prose">Ethernet은 원래 혼잡하면 패킷을 버리는 망입니다. RoCE를 쓰려면 손실이 없도록 따로 설정해야 합니다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>구성</th><th>하는 일</th><th>비고</th></tr></thead>
+    <tbody>
+      <tr><td>PFC, Priority Flow Control</td><td>특정 우선순위 트래픽에만 "잠깐 멈춤" 신호를 보내 버퍼 넘침을 막음</td><td>최후의 수단</td></tr>
+      <tr><td><button class="t" data-t="ecn">ECN</button>과 <button class="t" data-t="dcqcn">DCQCN</button></td><td>혼잡하면 패킷에 표시하고, 보내는 NIC이 속도를 줄임</td><td>혼잡 제어의 주력</td></tr>
+      <tr><td>DSCP</td><td>RoCE 트래픽을 전용 우선순위 큐로 분류</td><td>스위치와 NIC 전체에서 같아야 함</td></tr>
+    </tbody>
+  </table></div>
+  <h3>3. GID</h3>
+  <div class="prose"><ul>
+    <li>RoCE의 주소는 IP를 바탕으로 한 <button class="t" data-t="gid">GID</button>입니다.</li>
+    <li>NCCL에서는 <code>NCCL_IB_GID_INDEX</code>로 올바른 GID를 골라야 합니다. 보통 RoCE v2와 IPv4 조합의 GID입니다.</li>
+  </ul></div>
+  <h3>4. 속도와 스위치 칩</h3>
+  <div class="prose"><ul>
+    <li>포트 속도는 100G, 200G, 400G를 지나 지금 최신은 800G이고, 1.6T를 준비하고 있습니다.</li>
+    <li>스위치 칩, 즉 ASIC은 Broadcom Tomahawk 5가 51.2Tb/s, Tomahawk 6가 102.4Tb/s입니다. NVIDIA는 Spectrum-4와 Spectrum-6를 만듭니다.</li>
+    <li>AI용 기능으로 PFC, ECN, 적응형 라우팅, 패킷 스프레이가 들어갑니다. 패킷 스프레이는 패킷을 여러 경로에 흩어 보내는 방식입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-4">
+  <div class="ch-head"><span class="ch-num">3.4</span><h2>작동 방식</h2></div>
+  <h3>1. 일반 Ethernet의 전송</h3>
+  <div class="prose"><ul>
+    <li>기본은 최선 노력, 영어로 best effort 전송입니다. 혼잡하면 패킷을 버리고 TCP가 다시 보냅니다.</li>
+    <li>서버 사이 트래픽은 같은 비용의 여러 경로에 나눠 보냅니다. 이걸 <button class="t" data-t="ecmp">ECMP</button>라고 합니다.</li>
+    <li>다만 ECMP는 흐름 단위로 경로를 고르기 때문에, 큰 흐름 몇 개가 한 경로에 몰리는 문제가 있습니다. 큰 흐름을 elephant flow라고 부릅니다.</li>
+  </ul></div>
+  <h3>2. RoCE 패킷 한 개의 여정</h3>
+  <div class="prose"><ol>
+    <li><b>포장:</b> NIC이 RDMA 패킷을 UDP와 IP로 감싸서 보냅니다.</li>
+    <li><b>분류:</b> 스위치가 DSCP 값을 보고 무손실 큐에 넣습니다.</li>
+    <li><b>혼잡 표시:</b> 버퍼가 차면 패킷에 ECN 표시를 합니다. 받는 NIC이 보내는 NIC에 혼잡 알림, CNP를 보내고, 보내는 NIC이 속도를 줄입니다.</li>
+    <li><b>잠깐 멈춤:</b> 그래도 넘칠 것 같으면 PFC로 바로 앞 포트를 잠시 멈춥니다. 최후의 수단입니다.</li>
+  </ol></div>
+  <details>
+    <summary>Q. RoCE 망을 무손실로 만드는 두 가지 핵심 기능은 무엇인가요?</summary>
+  <div class="prose">
+  <p>PFC, 우선순위 흐름 제어와 ECN, 혼잡 표시입니다. ECN 표시를 받아 보내는 속도를 줄이는 혼잡 제어 방식이 DCQCN입니다.</p>
+  </div>
+  </details>
+  <details>
+    <summary>Q. RoCE 환경에서 NCCL이 느릴 때 흔한 원인은 무엇인가요?</summary>
+  <div class="prose">
+  <p>잘못된 GID 인덱스로 RoCE v1이나 IPv6 GID를 고른 경우, PFC와 ECN이 빠졌거나 장비마다 다른 경우, NIC과 GPU가 서로 다른 NUMA 노드에 있는 경우, MTU가 맞지 않는 경우가 흔합니다. NUMA는 8회차에서 봤습니다.</p>
+  </div>
+  </details>
+</section>
+
+<section class="ch" id="s3-5">
+  <div class="ch-head"><span class="ch-num">3.5</span><h2>이점</h2></div>
+  <div class="prose"><ul>
+    <li><b>있는 장비와 사람으로 <button class="t" data-t="rdma">RDMA</button>를 씁니다:</b> 기존 Ethernet 장비, 운영 인력, 도구, 보안 체계를 그대로 씁니다.</li>
+    <li><b>여러 회사 제품을 고릅니다:</b> 경쟁이 있어 비용이 낮고 공급이 안정적입니다.</li>
+    <li><b>InfiniBand에 가까운 성능이 납니다:</b> 튜닝이 잘 됐을 때 지연과 대역폭이 InfiniBand에 근접합니다.</li>
+    <li><b>크게 늘리기 쉽습니다:</b> 수십만 엔드포인트 규모까지 확장하고, 컴퓨팅과 스토리지를 한 망으로 합칠 수 있습니다.</li>
+    <li><b>실제 사례가 있습니다:</b> Meta는 2024년 24,576 GPU 클러스터 두 개를 하나는 RoCE, 하나는 InfiniBand로 지었습니다. 둘 다 Llama 3 학습에 썼고, 가장 큰 모델은 RoCE 클러스터에서 학습했다고 밝혔습니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-6">
+  <div class="ch-head"><span class="ch-num">3.6</span><h2>부재 시 문제</h2></div>
+  <p class="prose">RoCE가 없다고 가정해 보면, 이런 문제가 생깁니다.</p>
+  <div class="prose"><ul>
+    <li>Ethernet 망에서 RDMA를 쓸 수 없습니다. 학습 통신이 TCP로 돌아가 다중 서버 효율이 떨어지거나, <button class="t" data-t="infiniband">InfiniBand</button> 망을 따로 지어야 합니다.</li>
+    <li>모든 AI 클러스터가 InfiniBand에 기대게 되어, 한 회사의 가격과 공급에 묶입니다.</li>
+    <li>관리망, 스토리지망, 외부 서비스 연결에는 어차피 Ethernet이 필요하므로 망을 두 벌 운영하게 됩니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-7">
+  <div class="ch-head"><span class="ch-num">3.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>설정이 어렵습니다:</b> PFC, ECN, DSCP, 버퍼 값이 스위치와 NIC 전체에서 일관돼야 합니다.</li>
+    <li><b>PFC가 부작용을 냅니다:</b> 멈춤 신호가 연쇄로 퍼져 상관없는 트래픽까지 막히는 <button class="t" data-t="hol">head-of-line blocking</button>, 멈춤 신호가 폭주하는 PFC storm, 서로 기다리다 멈추는 교착 상태가 생길 수 있습니다.</li>
+    <li><b>손실에 아주 약합니다:</b> 하나를 잃으면 그 뒤를 모두 다시 보내는 Go-back-N 계열 방식이라, 손실이 조금만 나도 성능이 급락합니다.</li>
+    <li><b>경로가 고르게 나뉘지 않습니다:</b> 규모가 크면 ECMP 해시 충돌로 일부 링크만 혼잡해집니다. 집단 통신은 가장 느린 흐름이 전체 속도를 정하므로 꼬리 지연이 커집니다.</li>
+    <li><b>지연이 조금 깁니다:</b> 같은 속도라면 InfiniBand보다 지연이 다소 깁니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-8">
+  <div class="ch-head"><span class="ch-num">3.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. NVIDIA Spectrum-X</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> Spectrum 스위치와 <button class="t" data-t="supernic">SuperNIC</button>이 함께 움직여 적응형 라우팅과 혼잡 제어를 하는 AI용 Ethernet 플랫폼입니다.</li>
+    <li><b>해결하는 단점:</b> RoCE 성능을 안정시키고 ECMP 해시 충돌을 줄입니다.</li>
+  </ul></div>
+  <h3>2. UEC의 UET</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 손실을 견디고, 순서가 바뀌어도 받아 주고, 여러 경로를 함께 쓰는 새 전송 계층입니다. 1.10에서 봤습니다.</li>
+    <li><b>해결하는 단점:</b> PFC에 기대지 않아도 됩니다.</li>
+  </ul></div>
+  <h3>3. Broadcom과 Arista 등의 AI Ethernet</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 스위치가 셀 단위로 트래픽을 나눠 보내는 스케줄드 패브릭, 로드 밸런싱 기능을 넣은 장비입니다.</li>
+    <li><b>해결하는 단점:</b> 경로 쏠림과 혼잡을 줄입니다.</li>
+  </ul></div>
+  <h3>4. InfiniBand</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 튜닝 부담 없이 무손실 RDMA를 쓰는 전용 망입니다. PART 2에서 봤습니다.</li>
+    <li><b>해결하는 단점:</b> 무손실 설정 자체가 필요 없습니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-9">
+  <div class="ch-head"><span class="ch-num">3.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>항목</th><th>RoCE v2</th><th>InfiniBand</th><th><button class="t" data-t="iwarp">iWARP</button></th><th>UEC UET</th><th>일반 Ethernet, TCP</th></tr></thead>
+    <tbody>
+      <tr><td>기반</td><td>UDP와 IP 위 Ethernet</td><td>전용 InfiniBand 망</td><td>TCP와 IP</td><td>Ethernet, 새 전송 계층</td><td>TCP와 IP</td></tr>
+      <tr><td>RDMA</td><td>지원</td><td>기본 내장</td><td>지원</td><td>지원</td><td>없음</td></tr>
+      <tr><td>손실 처리</td><td>PFC와 ECN으로 무손실 구성</td><td>크레딧 기반, 설계상 무손실</td><td>TCP가 재전송</td><td>손실 허용 설계</td><td>손실 뒤 재전송</td></tr>
+      <tr><td>성능</td><td>높음, 튜닝에 좌우됨</td><td>가장 높음</td><td>중간</td><td>높음 목표</td><td>낮음</td></tr>
+      <tr><td>장비 공급</td><td>여러 회사</td><td>사실상 NVIDIA</td><td>여러 회사</td><td>여러 회사</td><td>여러 회사</td></tr>
+      <tr><td>AI 클러스터 쓰임</td><td>대규모 학습과 추론, 확산 중</td><td>최상위 학습 클러스터</td><td>드묾</td><td>도입 초기</td><td>관리망, 스토리지망</td></tr>
+    </tbody>
+  </table></div>
+  <details>
+    <summary>Q. 같은 400G라면 Ethernet과 InfiniBand의 성능이 같은가요?</summary>
+  <div class="prose">
+  <p>링크 속도는 같아도 혼잡할 때의 동작, 꼬리 지연, 집단 통신 가속 기능이 다릅니다. 그래서 실제 학습 성능은 망 설계와 튜닝에 따라 차이가 납니다. nccl-tests 같은 측정 도구로 직접 비교합니다.</p>
+  </div>
+  </details>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>RoCE는 Ethernet 위의 RDMA이고, 성패는 무손실 설정에 달려 있습니다.</b> 설정이 잘되면 InfiniBand에 가깝고, 잘못되면 망 전체가 느려지거나 멈춥니다.</div>
+</section>
+
+<section class="ch" id="s3-10">
+  <div class="ch-head"><span class="ch-num">3.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. AI 백엔드망에서 Ethernet이 InfiniBand를 앞섰습니다</h3>
+  <div class="prose"><ul>
+    <li>시장 조사 회사 Dell'Oro는 2025년이 전환점이었다고 밝혔습니다. AI 백엔드망에서 Ethernet이 InfiniBand를 앞섰다는 것입니다.</li>
+    <li>2025년 4분기와 2025년 한 해 모두, AI 클러스터용 데이터센터 스위치 매출의 3분의 2 이상이 Ethernet이었습니다.</li>
+    <li>불과 2년 전에는 InfiniBand가 80% 가까이를 차지했습니다.</li>
+  </ul></div>
+  <h3>2. 스위치 칩 한 개가 102.4Tb/s가 됐습니다</h3>
+  <div class="prose"><ul>
+    <li>2025년 6월 Broadcom은 102.4Tb/s 스위치 칩 Tomahawk 6를 출하하기 시작했습니다. 200G 포트 512개, 또는 100G 포트 1,024개를 만들 수 있고, <button class="t" data-t="uec">UEC</button> 사양을 지원합니다.</li>
+    <li>NVIDIA의 Spectrum-6 기반 Spectrum-X Photonics도 CPO 방식입니다. SN6810은 102.4Tb/s, SN6800은 칩 네 개로 409.6Tb/s입니다. 2026년 생산과 출하가 시작됐다는 보도가 있고, 서버 제조사를 통한 공급은 2026년 하반기로 알려졌습니다.</li>
+  </ul></div>
+  <h3>3. 데이터센터 여러 곳을 하나로 잇습니다</h3>
+  <div class="prose"><ul>
+    <li>2025년 8월 NVIDIA는 Spectrum-XGS를 발표했습니다. 거리에 맞춰 혼잡 제어를 조정해, 떨어진 데이터센터 여러 곳을 하나의 AI 클러스터처럼 묶는 기술입니다.</li>
+    <li>NVIDIA는 이것을 scale-up, scale-out에 이은 scale-across라고 불렀습니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>AI 서버 간 통신의 주류가 Ethernet으로 옮겨 가고 있고, 그 중심에는 RoCE와 그 뒤를 잇는 Ultra Ethernet이 있습니다.</b></div>
+</section>
+
+<!-- ============ PART 4 ============ -->
+<div class="part" id="p4">
+  <div class="pk">PART 4</div>
+  <h2>NIC (Network Interface Card)</h2>
+  <p>여기까지가 망의 종류였습니다. 마지막으로, 어느 망을 쓰든 서버에 꽂혀 실제로 통신을 수행하는 카드, NIC으로 넘어가겠습니다.</p>
+</div>
+
+<section class="ch" id="s4-1">
+  <div class="ch-head"><span class="ch-num">4.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="nic">NIC</button>, Network Interface Card는 <b>서버를 네트워크에 연결하는 카드</b>입니다. AI 클러스터에서는 RDMA, GPUDirect, 혼잡 제어까지 하드웨어로 처리하는 고성능 장치입니다.</p>
+  <div class="prose"><ul>
+    <li>서버의 PCIe 슬롯에 꽂혀 Ethernet이나 InfiniBand 링크를 제공합니다. InfiniBand 모드로 쓸 때 부르는 이름이 PART 2에서 본 HCA입니다.</li>
+    <li>역할에 따라 네 단계로 발전했습니다. 일반 NIC, 일부 처리를 맡는 <button class="t" data-t="smartnic">SmartNIC</button>, 자체 CPU 코어를 단 DPU, 그리고 AI GPU 통신 전용의 SuperNIC입니다. DPU의 대표는 NVIDIA BlueField입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s4-2">
+  <div class="ch-head"><span class="ch-num">4.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li>네트워크 속도가 CPU의 패킷 처리 속도를 앞지르면서, 처리를 NIC으로 내려보내는 방향으로 발전했습니다. 이걸 <button class="t" data-t="netoffload">offload</button>라고 합니다.</li>
+    <li>AI 클러스터에서는 GPU 한 장이 400Gb/s 이상을 주고받아야 해서, NIC 하나를 여러 GPU가 나눠 쓰면 바로 병목이 됐습니다.</li>
+  </ul></div>
+  <div class="callout idea"><span class="say">"그럼 GPU마다 전용 NIC을 붙이고, 통신 처리는 NIC이 다 하자!"</span>그래서 등장한 것이 바로 <b>GPU마다 RDMA NIC을 하나씩 짝지은 구조</b>입니다.<ul><li>DGX H100은 H100 8장에 ConnectX-7을 8개, GPU마다 하나씩 붙입니다.</li><li>인프라 처리까지 맡는 DPU, AI 통신에 특화한 SuperNIC이 그 뒤를 이었습니다.</li></ul></div>
+</section>
+
+<section class="ch" id="s4-3">
+  <div class="ch-head"><span class="ch-num">4.3</span><h2>구조</h2></div>
+  <h3>1. 구성</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>구성</th><th>하는 일</th><th>수치와 비고</th></tr></thead>
+    <tbody>
+      <tr><td>PCIe 인터페이스</td><td>서버의 CPU, 메모리, GPU와 연결</td><td>Gen5 x16, 7회차</td></tr>
+      <tr><td>네트워크 포트</td><td>케이블이나 광모듈을 꽂는 자리</td><td>QSFP, OSFP 규격</td></tr>
+      <tr><td>패킷 처리 엔진</td><td>체크섬, 분할과 합치기, 여러 큐로 나누기</td><td>TSO, LRO, RSS</td></tr>
+      <tr><td>RDMA 엔진</td><td>QP와 CQ 처리, 메모리 직접 읽고 쓰기</td><td>PART 1</td></tr>
+    </tbody>
+  </table></div>
+  <div class="prose"><ul>
+    <li><b><button class="t" data-t="sriov">SR-IOV</button>:</b> 물리 NIC 하나를 여러 개의 가상 기능, VF로 나눠 VM이나 Pod에 직접 내줍니다.</li>
+    <li>이 밖에 암호화 같은 기능도 NIC이 맡습니다.</li>
+  </ul></div>
+  <h3>2. DGX H100의 NIC 배치</h3>
+  <div class="prose"><ul>
+    <li>GPU 백엔드용 ConnectX-7 8개가 GPU마다 하나씩 붙고, 각각 포트당 400Gb/s입니다.</li>
+    <li>스토리지와 관리용으로 BlueField-3 DPU 2개가 따로 있습니다.</li>
+    <li>400Gb/s는 초당 50GB입니다. PCIe Gen5 x16은 한 방향 약 64GB/s라서, NIC 하나가 PCIe 한 슬롯에 들어갑니다. 7회차에서 본 숫자입니다.</li>
+  </ul></div>
+  <details>
+    <summary>Q. 서버에 NIC이 왜 GPU 수만큼 필요한가요?</summary>
+  <div class="prose">
+  <p>GPU 한 장이 다른 서버와 주고받는 데이터가 수백 Gb/s라서, NIC을 함께 쓰면 바로 병목이 됩니다. GPU마다 가까운 NIC을 하나씩 짝지으면 통신이 서로 간섭하지 않고, PCIe 경로도 짧아집니다.</p>
+  </div>
+  </details>
+</section>
+
+<section class="ch" id="s4-4">
+  <div class="ch-head"><span class="ch-num">4.4</span><h2>작동 방식</h2></div>
+  <div class="prose"><ol>
+    <li><b>준비:</b> 드라이버가 메모리에 송신과 수신용 링 버퍼를 만듭니다.</li>
+    <li><b>송신:</b> CPU나 GPU가 보낼 데이터의 위치를 적은 디스크립터를 씁니다. NIC이 <button class="t" data-t="dma">DMA</button>로 데이터를 읽어 보냅니다.</li>
+    <li><b>수신:</b> NIC이 받은 데이터를 DMA로 메모리에 쓰고, 인터럽트나 폴링으로 알립니다.</li>
+    <li><b>RDMA 모드:</b> Verbs 작업 요청을 NIC이 직접 처리합니다. 1.4에서 본 순서입니다.</li>
+  </ol></div>
+  <p class="prose">어느 단계든 데이터를 옮기는 것은 8회차에서 본 DMA입니다.</p>
+</section>
+
+<section class="ch" id="s4-5">
+  <div class="ch-head"><span class="ch-num">4.5</span><h2>이점</h2></div>
+  <div class="prose"><ul>
+    <li><b>CPU 부담이 줄어듭니다:</b> 패킷 처리와 전송을 NIC이 맡습니다.</li>
+    <li><b><button class="t" data-t="bandwidth">대역폭</button>은 넓고 지연은 짧습니다:</b> GPU마다 포트당 400Gb/s를 씁니다.</li>
+    <li><b>GPU마다 독립된 통신 경로가 생깁니다:</b> GPU와 NIC을 짝지어 배치하면 경로가 서로 겹치지 않습니다. 같은 번호 GPU의 NIC끼리 묶는 레일 구성은 12회차에서 다룹니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s4-6">
+  <div class="ch-head"><span class="ch-num">4.6</span><h2>부재 시 문제</h2></div>
+  <p class="prose">고성능 NIC이 없다고 가정해 보면, 이런 문제가 생깁니다.</p>
+  <div class="prose"><ul>
+    <li>서버 사이 통신 대역폭이 모자라 다중 서버 학습을 넓힐 수 없습니다.</li>
+    <li>CPU가 네트워크 처리에 쓰여 데이터 로딩과 전처리가 늦어집니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s4-7">
+  <div class="ch-head"><span class="ch-num">4.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>비용과 전력이 큽니다:</b> 고성능 NIC과 광모듈 모두 값이 비싸고 전력을 많이 씁니다.</li>
+    <li><b>버전 관리가 필요합니다:</b> NIC 펌웨어, OFED 드라이버, 커널이 서로 맞아야 합니다.</li>
+    <li><b>배치를 잘못하면 성능이 반으로 줄어듭니다:</b> NIC과 GPU가 다른 PCIe 스위치나 다른 <button class="t" data-t="numa">NUMA</button> 노드에 있으면 느려집니다. 8회차에서 봤습니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s4-8">
+  <div class="ch-head"><span class="ch-num">4.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. DPU</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> BlueField처럼 NIC 위에 CPU 코어를 올려, 스토리지, 보안, 가상 네트워크 처리를 NIC 위에서 합니다. 이런 카드를 <button class="t" data-t="dpu">DPU</button>라고 합니다.</li>
+    <li><b>해결하는 단점:</b> 서버 CPU를 풀어 주고, 여러 사용자를 나눠 격리하는 멀티테넌시를 하드웨어로 지킵니다.</li>
+  </ul></div>
+  <h3>2. SuperNIC</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> ConnectX-8, ConnectX-9 SuperNIC처럼 GPU 통신 전용으로 만든 NIC입니다. 적응형 라우팅과 혼잡 제어를 하드웨어로 돕습니다.</li>
+    <li><b>해결하는 단점:</b> Ethernet에서 RoCE 성능이 흔들리는 문제를 줄입니다.</li>
+  </ul></div>
+  <h3>3. CPO</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> Co-Packaged Optics, 광 변환을 스위치 칩 바로 옆에서 처리합니다.</li>
+    <li><b>해결하는 단점:</b> 따로 꽂는 광모듈의 전력을 줄입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s4-9">
+  <div class="ch-head"><span class="ch-num">4.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>종류</th><th>주 기능</th><th>대표 제품</th><th>AI 클러스터 역할</th></tr></thead>
+    <tbody>
+      <tr><td>일반 NIC</td><td>패킷 송수신</td><td>Intel E810 등</td><td>관리망</td></tr>
+      <tr><td>RDMA NIC</td><td>RDMA, GPUDirect</td><td>ConnectX-7, Ethernet 모드</td><td>GPU 백엔드망, RoCE, GPU당 1개</td></tr>
+      <tr><td>HCA</td><td>InfiniBand 망의 RDMA NIC</td><td>ConnectX-7, InfiniBand 모드</td><td>GPU 백엔드망, InfiniBand, GPU당 1개</td></tr>
+      <tr><td><button class="t" data-t="supernic">SuperNIC</button></td><td>AI 트래픽 최적화</td><td>ConnectX-8, ConnectX-9 SuperNIC</td><td>차세대 GPU 백엔드망</td></tr>
+      <tr><td>DPU</td><td>인프라 처리 오프로드와 보안 격리</td><td>BlueField-3, BlueField-4</td><td>프런트엔드망, 스토리지망, 멀티테넌시</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>AI 서버는 GPU마다 RDMA NIC을 하나씩 짝짓습니다.</b> InfiniBand 망에서는 그 NIC을 HCA라고 부를 뿐, 하는 일은 같습니다.</div>
+</section>
+
+<section class="ch" id="s4-10">
+  <div class="ch-head"><span class="ch-num">4.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. GPU당 네트워크 대역폭이 1.6Tb/s로 커집니다</h3>
+  <div class="prose"><ul>
+    <li>ConnectX-8 <button class="t" data-t="supernic">SuperNIC</button>은 800Gb/s 세대입니다. Broadcom Thor Ultra와 함께 800G RDMA NIC을 대표합니다.</li>
+    <li>2025년 10월 NVIDIA는 ConnectX-9 SuperNIC을 발표했습니다. Rubin GPU 한 장에 최대 1.6Tb/s를 제공하고, 포트 하나는 최대 800Gb/s입니다. GPU 한 장 기준으로 DGX H100의 400Gb/s보다 네 배 넓습니다. 2026년 Vera Rubin 플랫폼과 함께 나옵니다.</li>
+  </ul></div>
+  <h3>2. DPU가 더 큰 CPU를 품습니다</h3>
+  <div class="prose"><ul>
+    <li>같은 때 NVIDIA는 BlueField-4를 발표했습니다. Grace CPU와 ConnectX-9를 한 장에 묶어, 네트워크 대역폭은 800Gb/s로 BlueField-3의 두 배입니다.</li>
+    <li>계산 성능은 BlueField-3의 6배라고 밝혔고, 2026년 Vera Rubin 플랫폼에서 초기 공급을 시작합니다.</li>
+  </ul></div>
+  <h3>3. Ultra Ethernet NIC이 나옵니다</h3>
+  <div class="prose"><ul>
+    <li>AMD는 UEC 사양을 지원하는 400G NIC, Pensando Pollara 400을 출하하고 있습니다. 800G 후속인 Vulcano는 PCIe Gen6 시스템용으로 2026년 출시를 예고했습니다.</li>
+    <li>Broadcom Thor Ultra도 UEC 사양을 따르는 800G NIC입니다. 1.10에서 봤습니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>NIC은 GPU 통신 전용 SuperNIC과 인프라 처리 전용 DPU로 역할이 갈라지며, 세대마다 대역폭이 두 배씩 커지고 있습니다.</b></div>
+  <p class="prose">여기까지가 11회차였습니다. 오늘은 서버 사이 통신의 방식인 RDMA, 그 RDMA를 실어 나르는 InfiniBand와 RoCE, 그리고 서버에 꽂힌 카드인 NIC과 HCA를 봤습니다. 다음 12회차에서는 오늘 본 NIC과 스위치를 어떤 모양으로 잇는지, Fat-tree와 Leaf-Spine 구조를 봅니다.</p>
+</section>
+
+<section class="ch" id="refs">
+  <div class="ch-head"><span class="ch-num">+</span><h2>참고</h2></div>
+  <div class="prose"><ul>
+    <li><a href="https://docs.nvidia.com/dgx-basepod/reference-architecture-infrastructure-foundation-enterprise-ai/latest/core-components.html" target="_blank" rel="noopener">NVIDIA DGX BasePOD — Core Components (DGX H100 사양)</a></li>
+    <li><a href="https://docs.nvidia.com/networking/display/rdmaawareprogrammingv17" target="_blank" rel="noopener">RDMA Aware Networks Programming User Manual (NVIDIA)</a></li>
+    <li><a href="https://docs.nvidia.com/networking/display/kubernetes2410/index.html" target="_blank" rel="noopener">NVIDIA Network Operator 문서</a></li>
+    <li><a href="https://ultraethernet.org/uec-1-0-spec" target="_blank" rel="noopener">Ultra Ethernet Consortium — UEC 1.0 사양</a></li>
+    <li><a href="https://www.networkworld.com/article/4006285/ultra-ethernet-consortium-publishes-1-0-specification-readies-ethernet-for-hpc-ai.html" target="_blank" rel="noopener">Network World — UEC 1.0 사양 발표 (2025.6)</a></li>
+    <li><a href="https://investors.broadcom.com/news-releases/news-release-details/broadcom-introduces-industrys-first-800g-ai-ethernet-nic" target="_blank" rel="noopener">Broadcom — Thor Ultra 800G AI Ethernet NIC (2025.10)</a></li>
+    <li><a href="https://investors.broadcom.com/news-releases/news-release-details/broadcom-ships-tomahawk-6-worlds-first-1024-tbps-switch" target="_blank" rel="noopener">Broadcom — Tomahawk 6 출하 (2025.6)</a></li>
+    <li><a href="https://convergedigest.com/nvidia-debuts-spectrum-x-and-quantum-x-photonics-switches/" target="_blank" rel="noopener">NVIDIA Spectrum-X / Quantum-X Photonics 발표 (Converge Digest, 2025.3)</a></li>
+    <li><a href="https://developer.nvidia.com/blog/scaling-ai-factories-with-co-packaged-optics-for-better-power-efficiency" target="_blank" rel="noopener">Scaling AI Factories with Co-Packaged Optics (NVIDIA)</a></li>
+    <li><a href="https://wccftech.com/nvidia-first-co-packaged-optics-switch-lands-at-lambda-cutting-3kw-per-rack/amp/" target="_blank" rel="noopener">Quantum-X Photonics 첫 공급, Lambda (Wccftech, 2026.6)</a></li>
+    <li><a href="https://networking-docs.nvidia.com/sn6000hw/introduction" target="_blank" rel="noopener">Spectrum-6 SN6000 Switch Systems Hardware User Manual (NVIDIA)</a></li>
+    <li><a href="https://nvidianews.nvidia.com/news/nvidia-introduces-spectrum-xgs-ethernet-to-connect-distributed-data-centers-into-giga-scale-ai-super-factories" target="_blank" rel="noopener">NVIDIA — Spectrum-XGS Ethernet 발표 (2025.8)</a></li>
+    <li><a href="https://www.delloro.com/newsroom/ethernet-more-than-doubles-size-of-infiniband-as-the-leading-fabric-for-ai-scale-out-networks-in-2025/" target="_blank" rel="noopener">Dell'Oro — Ethernet more than doubles size of InfiniBand in AI scale-out networks (2025)</a></li>
+    <li><a href="https://www.delloro.com/newsroom/infiniband-switch-sales-surged-in-2q-2025-while-ethernet-maintains-market-lead-for-ai-back-end-networks/" target="_blank" rel="noopener">Dell'Oro — InfiniBand switch sales surged in 2Q 2025</a></li>
+    <li><a href="https://engineering.fb.com/2024/03/12/data-center-engineering/building-metas-genai-infrastructure/" target="_blank" rel="noopener">Meta — Building Meta's GenAI Infrastructure (2024)</a></li>
+    <li><a href="https://engineering.fb.com/2024/08/05/data-center-engineering/roce-network-distributed-ai-training-at-scale/" target="_blank" rel="noopener">Meta — RDMA over Ethernet for Distributed AI Training at Meta Scale (SIGCOMM 2024)</a></li>
+    <li><a href="https://docs.nvidia.com/deeplearning/nccl/release-notes/rel_2-29-7.html" target="_blank" rel="noopener">NCCL Release 2.29.7 (IB port failover)</a></li>
+    <li><a href="https://docs.nvidia.com/deeplearning/nccl/release-notes/rel_2-30-3.html" target="_blank" rel="noopener">NCCL Release 2.30.3 (IB port recovery)</a></li>
+    <li><a href="https://www.nvidia.com/en-us/networking/products/ethernet/supernic/" target="_blank" rel="noopener">NVIDIA Ethernet SuperNICs (ConnectX-8, ConnectX-9)</a></li>
+    <li><a href="https://blogs.nvidia.com/blog/bluefield-4-ai-factory/" target="_blank" rel="noopener">NVIDIA — BlueField-4 발표</a></li>
+    <li><a href="https://www.techradar.com/pro/amd-debuts-a-400gbe-ai-network-card-with-an-800gbe-pcie-gen6-nic-coming-in-2026-but-will-the-industry-be-ready" target="_blank" rel="noopener">TechRadar — AMD Pollara 400, Vulcano 800G NIC</a></li>
+  </ul></div>
+</section>
+
+<nav class="pager" id="pager" data-no="11" aria-label="회차 이동"></nav>
+</main>
+</div>
+
+<footer class="site"><div class="container">자료의 오류나 보충할 내용은 <a href="https://github.com/designerbohyun/domain-study/issues">GitHub 이슈</a>로 알려 주세요.</div></footer>
+<script src="../assets/terms.js"></script>
+<script src="../assets/sessions.js"></script>
+<script src="../assets/site.js"></script>
+<script src="11.js"></script>
+<script type="module">
+import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.esm.min.mjs";
+const t = document.documentElement.getAttribute("data-theme");
+const dark = t ? t === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+mermaid.initialize({ startOnLoad: false, theme: dark ? "dark" : "neutral", fontFamily: "inherit" });
+// ponytail: theme set at load; toggling theme needs a reload to recolor diagrams
+let i = 0;
+for (const el of document.querySelectorAll("pre.mermaid")) {
+  const { svg } = await mermaid.render("mmd" + i++, el.textContent);
+  const box = document.createElement("div");
+  box.className = "mmd";
+  box.innerHTML = svg;
+  el.replaceWith(box);
+}
+</script>
+</body>
+</html>

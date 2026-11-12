@@ -1,0 +1,733 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>10회차 · NCCL, AllReduce, AllGather, ReduceScatter · 도메인 스터디</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.0.6/css/pico.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="../assets/site.css">
+<script>try{var t=localStorage.getItem("theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+</head>
+<body data-root="..">
+<header class="site"><nav class="container">
+  <ul><li><a class="brand" href="../">도메인 스터디</a></li></ul>
+  <ul><li><a href="../">스터디 목차</a></li><li><a href="../structure.html">구조도</a></li><li><a href="../glossary.html">용어 사전</a></li></ul>
+</nav></header>
+
+<div class="container doc">
+<aside class="toc"><details open><summary>이 회차 목차</summary><ol id="toc"></ol></details></aside>
+<main>
+<header class="doc-head">
+  <div class="crumb"><a href="../">스터디 목차</a> / GPU 간 통신 / 10회차</div>
+  <h1>10회차 · NCCL, AllReduce, AllGather, ReduceScatter</h1>
+  <p>지난 9회차에서는 GPU끼리 잇는 길, NVLink와 NVSwitch, P2P, 그리고 GPUDirect를 봤습니다. 오늘은 그 길 위에서 여러 GPU가 데이터를 함께 합치고 나눠 갖는 방법, 집단 통신을 보겠습니다.</p><p>오늘은 네 가지를 봅니다. 첫째는 집단 통신을 실제로 수행하는 NVIDIA 라이브러리, <b><button class="t" data-t="nccl">NCCL</button></b>입니다. 둘째는 모두 합쳐서 모두에게 주는 <b><button class="t" data-t="allreduce">AllReduce</button></b>입니다. 셋째는 조각을 모아 모두에게 주는 <b><button class="t" data-t="allgather">AllGather</button></b>입니다. 넷째는 합친 뒤 조각내서 나눠 주는 <b><button class="t" data-t="reducescatter">ReduceScatter</button></b>입니다. 세 연산은 따로 노는 것이 아닙니다. <b>AllReduce는 ReduceScatter 다음에 AllGather를 한 것과 같습니다.</b></p>
+  <div class="flow" aria-label="주제별 진행 순서">
+    <span><b>1</b>정의</span><span><b>2</b>등장 배경</span><span><b>3</b>구조</span><span><b>4</b>작동 방식</span><span><b>5</b>이점</span><span><b>6</b>부재 시 문제</span><span><b>7</b>단점</span><span><b>8</b>대안 기술</span><span><b>9</b>대안과의 비교</span><span><b>10</b>최신 트렌드</span>
+  </div>
+</header>
+
+<section class="ch" id="s0">
+  <div class="ch-head"><span class="ch-num">0</span><h2>세 연산 한눈에 보기</h2></div>
+  <figure class="fig"><pre class="mermaid">flowchart LR
+  A["GPU 4장&lt;br&gt;각자 전체 N&lt;br&gt;G0: a0 b0 c0 d0&lt;br&gt;G1: a1 b1 c1 d1&lt;br&gt;..."] --&gt;|"ReduceScatter&lt;br&gt;조각별로 합산"| B["GPU마다 합산된 조각 1개&lt;br&gt;G0: Σa · G1: Σb&lt;br&gt;G2: Σc · G3: Σd"]
+  B --&gt;|"AllGather&lt;br&gt;조각 모으기"| C["모든 GPU가 전체 합&lt;br&gt;Σa Σb Σc Σd"]
+  A -.-&gt;|"AllReduce&lt;br&gt;두 단계를 한 번에"| C</pre></figure>
+  <div class="tbl"><table>
+    <thead><tr><th>주제</th><th>한 줄 요약</th><th>GPU당 입력과 출력</th><th>이어지는 회차</th></tr></thead>
+    <tbody>
+      <tr><td>NCCL</td><td>집단 통신을 연결 구조에 맞춰 수행하는 라이브러리</td><td>연산마다 다름</td><td>9회차 NVLink·GPUDirect, 11회차 RDMA</td></tr>
+      <tr><td>AllReduce</td><td>모두 합쳐서 모두에게</td><td>전체 N → 합산된 전체 N</td><td>17회차 데이터 병렬</td></tr>
+      <tr><td>AllGather</td><td>조각을 모아 모두에게</td><td>조각 N/P → 전체 N</td><td>18회차 ZeRO·FSDP</td></tr>
+      <tr><td>ReduceScatter</td><td>합친 뒤 조각내서 나눠 주기</td><td>전체 N → 합산된 조각 N/P</td><td>18회차 ZeRO·FSDP</td></tr>
+    </tbody>
+  </table></div>
+  <p class="prose">※ 기준 제품은 5회차부터 써 온 NVIDIA H100 SXM이고, 서버는 DGX H100입니다. 서버 안에서는 GPU 8장이 <button class="t" data-t="nvswitch">NVSwitch</button>로 이어져 GPU마다 NVLink 4 양방향 900GB/s를 쓰고, 서버 사이로는 GPU마다 ConnectX-7 400Gb/s NIC가 하나씩 붙습니다. 글에서 N은 GPU 한 장이 가진 데이터 크기, P는 참여하는 GPU 수입니다.</p>
+</section>
+
+<!-- ============ PART 1 ============ -->
+<div class="part" id="p1">
+  <div class="pk">PART 1</div>
+  <h2>NCCL (NVIDIA Collective Communications Library)</h2>
+  <p>먼저 이 연산들을 실제로 수행하는 소프트웨어, NCCL부터 보겠습니다. 9회차에서 본 NVLink와 GPUDirect가 길이라면, NCCL은 그 길 위로 데이터를 어떤 순서와 경로로 보낼지 정하는 라이브러리입니다.</p>
+</div>
+
+<section class="ch" id="s1-1">
+  <div class="ch-head"><span class="ch-num">1.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="nccl">NCCL</button>, NVIDIA Collective Communications Library는 <b>여러 GPU와 여러 서버 사이의 집단 통신을, 하드웨어 연결 구조에 맞춰 가장 빠른 경로로 수행하는 NVIDIA 라이브러리</b>입니다.</p>
+  <div class="prose"><ul>
+    <li>니클이라고 읽습니다.</li>
+    <li>집단 통신, 영어로 Collective는 여러 GPU가 한꺼번에 참여하는 통신입니다. NCCL은 AllReduce, AllGather, ReduceScatter, Broadcast, Reduce를 제공하고, 두 GPU 사이에서 주고받는 Send와 Recv도 제공합니다. AllToAll은 Send와 Recv를 조합해 만듭니다.</li>
+    <li>PyTorch <code>torch.distributed</code>의 GPU 기본 백엔드입니다. DeepSpeed, Megatron-LM, JAX도 대부분 안에서 NCCL을 씁니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-2">
+  <div class="ch-head"><span class="ch-num">1.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li>여러 GPU로 학습하면 GPU마다 계산한 그래디언트를 매 스텝 서로 맞춰야 합니다.</li>
+    <li>이 일을 <button class="t" data-t="mpi">MPI</button> 같은 범용 통신 라이브러리로 하면, NVLink, PCIe 스위치, NIC 위치 같은 GPU 서버의 연결 구조를 활용하지 못해 느렸습니다.</li>
+    <li>GPU 메모리의 데이터를 CPU 메모리로 옮긴 뒤 보내는 비용도 생겼습니다.</li>
+  </ul></div>
+  <div class="callout idea"><span class="say">"그럼 GPU 연결 구조를 스스로 파악해서, GPU끼리 직접 통신하는 전용 라이브러리를 만들자!"</span>그래서 등장한 것이 바로 <b>NCCL</b>입니다.<ul><li>2016년 NCCL 1이 서버 한 대 안의 GPU용으로 나왔습니다.</li><li>2017년 NCCL 2가 여러 서버와 InfiniBand를 지원하기 시작했습니다.</li></ul></div>
+</section>
+
+<section class="ch" id="s1-3">
+  <div class="ch-head"><span class="ch-num">1.3</span><h2>구조</h2></div>
+  <h3>1. 구성 요소</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>구성</th><th>하는 일</th><th>종류</th></tr></thead>
+    <tbody>
+      <tr><td>토폴로지 탐지</td><td>시작할 때 GPU, NVLink, PCIe 스위치, NIC, NUMA 구조를 그래프로 파악</td><td>8회차 NUMA, 9회차 NVLink와 같은 정보</td></tr>
+      <tr><td>알고리즘</td><td>데이터를 어떤 모양으로 주고받을지 정함</td><td>Ring, Tree, CollNet, NVLS, PAT</td></tr>
+      <tr><td>프로토콜</td><td>한 번에 보내는 단위와 동기화 방식</td><td>Simple은 대용량, LL과 LL128은 작은 메시지용 저지연</td></tr>
+      <tr><td>전송 계층 (transport)</td><td>데이터가 실제로 지나는 길</td><td>P2P (NVLink, PCIe), SHM (CPU 공유 메모리), NET (InfiniBand, RoCE, TCP 소켓)</td></tr>
+      <tr><td>채널</td><td>데이터를 여러 갈래로 나눠 여러 SM과 링크를 동시에 씀</td><td>연산마다 여러 개</td></tr>
+    </tbody>
+  </table></div>
+  <h3>2. 알고리즘</h3>
+  <div class="prose"><ul>
+    <li><b>Ring:</b> GPU를 원형으로 잇고 이웃에게 조각을 넘깁니다. 큰 메시지에서 대역폭을 가장 잘 씁니다. PART 2에서 자세히 봅니다.</li>
+    <li><b>Tree:</b> 이진 트리 두 개를 겹친 Double Binary Tree입니다. 단계 수가 GPU 수의 로그에 비례해서, GPU가 많고 메시지가 작을 때 유리합니다.</li>
+    <li><b>CollNet:</b> InfiniBand 스위치의 SHARP 기능으로 합산을 스위치에 맡깁니다. 11회차에서 다룹니다.</li>
+    <li><b><button class="t" data-t="nvls">NVLS</button>:</b> NVLink SHARP의 줄임말입니다. 9회차에서 본 NVSwitch 안에서 합산합니다.</li>
+    <li><b>PAT:</b> 대규모 AllGather와 ReduceScatter용 알고리즘입니다. PART 3에서 봅니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-4">
+  <div class="ch-head"><span class="ch-num">1.4</span><h2>작동 방식</h2></div>
+  <div class="prose"><ol>
+    <li><b>통신 그룹 만들기:</b> GPU마다 프로세스가 하나씩 돌고, 모두 같은 고유 ID를 나눠 받아 <button class="t" data-t="communicator">communicator</button>, 즉 통신 그룹을 만듭니다. 함수 이름은 <code>ncclCommInitRank</code>입니다.</li>
+    <li><b>경로 고르기:</b> 토폴로지를 분석하고, 메시지 크기와 GPU 수에 맞춰 알고리즘과 프로토콜을 자동으로 고릅니다.</li>
+    <li><b>커널 실행:</b> 집단 연산을 부르면 NCCL 커널이 GPU에서 돕니다. SM 일부를 써서 데이터를 보내고, 받고, 더합니다.</li>
+    <li><b>겹치기:</b> 연산은 CUDA 스트림에 비동기로 올라갑니다. 그래서 계산과 통신을 겹쳐 실행할 수 있습니다.</li>
+  </ol></div>
+  <pre><code>import torch.distributed as dist
+dist.init_process_group(backend="nccl")   # torchrun이 RANK, WORLD_SIZE 등 환경변수 설정
+dist.all_reduce(grad_tensor, op=dist.ReduceOp.SUM)</code></pre>
+  <details>
+    <summary>Q. NCCL이 어떤 경로로 통신하는지 가장 간단히 확인하는 방법은 무엇인가요?</summary>
+  <div class="prose">
+  <p><code>NCCL_DEBUG=INFO</code>로 실행하면 로그에 경로가 나옵니다. P2P는 NVLink나 PCIe로 직접, SHM은 CPU 공유 메모리를 거치는 경로, NET은 네트워크입니다. NET 줄에 GDR이 보이면 GPUDirect RDMA를 쓰고 있다는 뜻입니다.</p>
+  </div>
+  </details>
+</section>
+
+<section class="ch" id="s1-5">
+  <div class="ch-head"><span class="ch-num">1.5</span><h2>이점</h2></div>
+  <div class="prose"><ul>
+    <li><b>하드웨어를 알아서 씁니다:</b> NVLink, NVSwitch, <button class="t" data-t="gpudirect-rdma">GPUDirect RDMA</button>를 자동으로 찾아 씁니다. 사용자는 API만 부르면 됩니다.</li>
+    <li><b>크게 늘려도 검증돼 있습니다:</b> 수만 GPU 규모에서 쓰이고, 주요 프레임워크에 모두 기본으로 들어 있습니다.</li>
+    <li><b>열려 있습니다:</b> 오픈소스이고, 네트워크 플러그인 구조라 여러 NIC를 붙일 수 있습니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-6">
+  <div class="ch-head"><span class="ch-num">1.6</span><h2>부재 시 문제</h2></div>
+  <p class="prose">NCCL이 없다고 가정해 보면, 이런 문제가 생깁니다.</p>
+  <div class="prose"><ul>
+    <li>프레임워크마다 GPU 통신을 직접 구현해야 합니다. 연결 구조에 맞춘 최적화가 빠지면 다중 GPU 학습 효율이 크게 떨어집니다.</li>
+    <li>MPI나 <button class="t" data-t="gloo">Gloo</button> 같은 범용 백엔드로 대신하면, GPU 메모리를 CPU 메모리로 옮기는 비용이 생깁니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-7">
+  <div class="ch-head"><span class="ch-num">1.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>디버깅이 어렵습니다:</b> 집단 통신은 모든 GPU가 참여해야 끝납니다. 그래서 한 GPU가 늦거나 죽으면 나머지 전체가 기다리며 멈춥니다. 이걸 <button class="t" data-t="hang">hang</button>이라고 하고, 타임아웃이 날 때까지 원인을 찾기 어렵습니다.</li>
+    <li><b>설정에 민감합니다:</b> 엉뚱한 NIC를 고르거나 RoCE의 GID 설정이 틀리면 느려지거나 연결이 안 됩니다. RoCE는 11회차에서 다룹니다.</li>
+    <li><b>SM을 나눠 씁니다:</b> 통신 커널이 SM을 차지해서 계산과 자원을 다툽니다. 1.10에서 다시 봅니다.</li>
+    <li><b>NVIDIA GPU 전용입니다.</b></li>
+  </ul></div>
+  <details>
+    <summary>Q. 학습이 갑자기 멈췄는데 에러가 안 나요. NCCL 문제인가요?</summary>
+  <div class="prose">
+  <p>그럴 수 있습니다. 한 랭크, 즉 한 프로세스가 죽거나 다른 연산을 하고 있으면 나머지가 끝없이 기다립니다. PyTorch의 NCCL 타임아웃과 watchdog 설정, 그리고 Flight Recorder로 어느 랭크가 어떤 연산에서 멈췄는지 확인합니다.</p>
+  </div>
+  </details>
+</section>
+
+<section class="ch" id="s1-8">
+  <div class="ch-head"><span class="ch-num">1.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. 다른 GPU용 집단 통신 라이브러리</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> AMD의 RCCL, Intel의 oneCCL입니다. RCCL은 NCCL API와 호환되는 포크입니다.</li>
+    <li><b>해결하는 단점:</b> NVIDIA GPU 전용이라는 한계를 다른 회사 GPU에서 풉니다.</li>
+  </ul></div>
+  <h3>2. 범용 통신 라이브러리</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> CPU 통신용 Gloo, HPC 표준 MPI, 여러 백엔드를 묶는 UCC입니다.</li>
+    <li><b>해결하는 단점:</b> GPU가 없는 환경이나 제어 메시지처럼 NCCL이 맞지 않는 통신을 맡습니다.</li>
+  </ul></div>
+  <h3>3. MSCCL과 MSCCL++</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> Microsoft가 만든 도구로, 통신 알고리즘을 사용자가 직접 정의합니다.</li>
+    <li><b>해결하는 단점:</b> 자동 선택이 특수한 구성에 맞지 않을 때 알고리즘을 직접 짭니다.</li>
+  </ul></div>
+  <h3>4. NVSHMEM</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> GPU 커널 안에서 다른 GPU 메모리에 직접 읽고 쓰는 라이브러리입니다. <button class="t" data-t="nvshmem">NVSHMEM</button>이라고 부릅니다.</li>
+    <li><b>해결하는 단점:</b> 통신을 커널 밖에서만 부를 수 있는 한계를 넘습니다. MoE처럼 세밀한 통신에 씁니다.</li>
+  </ul></div>
+  <h3>5. 진단 도구</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> PyTorch Flight Recorder, NCCL 로그, 성능 측정 도구 <code>nccl-tests</code>입니다.</li>
+    <li><b>해결하는 단점:</b> 어디서 멈췄는지, 하드웨어 성능이 제대로 나오는지 찾기 어렵다는 단점을 줄입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-9">
+  <div class="ch-head"><span class="ch-num">1.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>라이브러리</th><th>대상 하드웨어</th><th>GPU 직접 통신</th><th>주 용도</th></tr></thead>
+    <tbody>
+      <tr><td>NCCL</td><td>NVIDIA GPU</td><td>O (NVLink, <button class="t" data-t="rdma">RDMA</button>)</td><td>AI 학습·추론 표준</td></tr>
+      <tr><td>RCCL</td><td>AMD GPU</td><td>O</td><td>NCCL API 호환 포크</td></tr>
+      <tr><td>Gloo</td><td>CPU (GPU는 CPU 경유)</td><td>X</td><td>CPU 학습, 제어 메시지</td></tr>
+      <tr><td>MPI (CUDA-aware)</td><td>범용</td><td>구현에 따라</td><td>HPC</td></tr>
+      <tr><td>NVSHMEM</td><td>NVIDIA GPU</td><td>O (커널 내부)</td><td>세밀한 통신, MoE</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>NCCL은 GPU 연결 구조를 스스로 파악해 알고리즘과 경로를 고르는 라이브러리입니다.</b> PyTorch 분산 학습은 사실상 모두 NCCL 위에서 돕니다.</div>
+</section>
+
+<section class="ch" id="s1-10">
+  <div class="ch-head"><span class="ch-num">1.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. 통신을 커널 안에서 직접 부릅니다</h3>
+  <div class="prose"><ul>
+    <li>2025년 NCCL 2.28에 Device API가 실험 기능으로 들어왔습니다. 애플리케이션의 CUDA 커널 안에서 NCCL 통신을 직접 부르는 API입니다.</li>
+    <li>방식은 세 가지입니다. NVLink나 PCIe로 다른 GPU 메모리를 직접 읽고 쓰는 LSA, NVLink SHARP를 쓰는 Multimem, 그리고 네트워크로 통신하는 GIN입니다.</li>
+    <li><button class="t" data-t="gin">GIN</button>, GPU-Initiated Networking은 2.28.7에서 처음 들어왔습니다. GPU 커널이 CPU를 거치지 않고 직접 네트워크 전송을 시작합니다.</li>
+  </ul></div>
+  <h3>2. SM을 쓰지 않는 통신</h3>
+  <div class="prose"><ul>
+    <li>같은 2.28은 Copy Engine 집단 통신도 소개했습니다. 8회차에서 본 복사 엔진이 NVLink 전송을 맡아서, SM을 쓰지 않습니다. AllGather와 AllToAll처럼 데이터만 옮기는 연산이 대상입니다.</li>
+    <li>NVIDIA가 2025년 11월 블로그에서 밝힌 Blackwell GPU 8장 측정에서는, 복사 엔진 AllGather가 최고 약 780GB/s로 SM을 쓰는 방식의 약 620GB/s보다 빨랐습니다.</li>
+    <li>2.30.7은 계층형 zero-SM 집단 통신을 켜는 옵션을 더했습니다.</li>
+  </ul></div>
+  <h3>3. 장애가 나도 멈추지 않는 통신</h3>
+  <div class="prose"><ul>
+    <li>2.29.2에 <code>ncclCommGrow</code>가 들어왔습니다. 이미 있던 <code>ncclCommShrink</code>와 함께, 장애가 난 노드를 빼고 복구된 노드를 다시 넣어 통신 그룹을 바꿉니다. 같은 버전에 Python 바인딩인 NCCL4Py도 나왔습니다.</li>
+    <li>2.29.7은 IB와 RoCE 포트 자동 failover를, 2.30.3은 IB 포트 복구와 여러 NVLink 도메인을 하나로 묶는 기능을 더했습니다.</li>
+    <li>2.29.7부터 라이선스가 Apache 2.0으로 바뀌었고, 2.32.3은 Vera Rubin을 처음 지원했습니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>NCCL은 통신을 CPU에서 GPU 커널 안으로, SM에서 복사 엔진으로 옮기고, 장애가 나도 멈추지 않는 쪽으로 가고 있습니다.</b></div>
+</section>
+
+<!-- ============ PART 2 ============ -->
+<div class="part" id="p2">
+  <div class="pk">PART 2</div>
+  <h2>AllReduce</h2>
+  <p>여기까지가 NCCL이었습니다. 이제 NCCL이 수행하는 연산 가운데 가장 많이 쓰이는 AllReduce로 넘어가겠습니다.</p>
+</div>
+
+<section class="ch" id="s2-1">
+  <div class="ch-head"><span class="ch-num">2.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="allreduce">AllReduce</button>는 <b>모든 GPU의 데이터를 원소별로 합치고, 그 결과를 모든 GPU가 똑같이 갖게 하는 연산</b>입니다.</p>
+  <div class="prose"><ul>
+    <li>이름 그대로 Reduce, 즉 합치기와 All, 즉 모두에게를 합친 말입니다.</li>
+    <li>합치는 방법은 SUM, AVG, MAX, MIN, PROD 가운데 고릅니다. 학습에서는 주로 합이나 평균을 씁니다.</li>
+    <li>끝나면 모든 GPU의 텐서가 같은 값이 됩니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-2">
+  <div class="ch-head"><span class="ch-num">2.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li><button class="t" data-t="dataparallel">데이터 병렬</button> 학습은 GPU마다 다른 데이터로 그래디언트를 계산합니다. 데이터 병렬은 17회차에서 다룹니다.</li>
+    <li>모델을 GPU마다 똑같이 유지하려면, 그래디언트를 평균내서 모두에게 나눠야 합니다.</li>
+    <li>처음에는 중앙의 Parameter Server가 모아서 다시 나눠 줬습니다. 그런데 GPU가 늘수록 이 서버 하나에 트래픽이 몰렸습니다.</li>
+  </ul></div>
+  <div class="callout idea"><span class="say">"그럼 중앙 서버 없이, GPU끼리 원형으로 이어서 조각씩 넘기며 합치자!"</span>그래서 등장한 것이 바로 <b>Ring AllReduce</b>입니다.<ul><li>2017년 Baidu가 HPC에서 쓰던 Ring AllReduce를 딥러닝에 소개했습니다.</li><li>Uber의 Horovod가 이를 널리 퍼뜨렸고, NCCL이 표준 알고리즘으로 흡수했습니다.</li></ul></div>
+</section>
+
+<section class="ch" id="s2-3">
+  <div class="ch-head"><span class="ch-num">2.3</span><h2>구조</h2></div>
+  <h3>1. Ring AllReduce의 두 단계</h3>
+  <div class="prose"><ul>
+    <li>GPU P장을 원형으로 잇고, 데이터를 P개 조각으로 나눕니다. 이 방식이 <button class="t" data-t="ring">Ring</button> 알고리즘입니다.</li>
+    <li><b>1단계 ReduceScatter:</b> 이웃에게 조각을 넘기며 더하기를 P 빼기 1번 합니다. 끝나면 GPU마다 한 조각의 최종 합을 갖습니다.</li>
+    <li><b>2단계 AllGather:</b> 완성된 조각을 P 빼기 1번 더 돌려 모두에게 퍼뜨립니다.</li>
+  </ul></div>
+  <h3>2. 보내는 양</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>항목</th><th>값</th><th>뜻</th></tr></thead>
+    <tbody>
+      <tr><td>GPU당 송신량</td><td>2 × (P−1)/P × N</td><td>GPU가 늘어도 2N에 가까워짐</td></tr>
+      <tr><td>단계 수</td><td>2 × (P−1)</td><td>GPU 수에 비례해 늘어남</td></tr>
+      <tr><td>계산 예 (DGX H100 8장)</td><td>2 × 7/8 × 14GB ≈ 24.5GB</td><td>7B 모델의 BF16 그래디언트 14GB</td></tr>
+    </tbody>
+  </table></div>
+  <div class="prose"><ul>
+    <li>GPU 한 장이 보내는 양은 GPU 수가 늘어도 거의 2N으로 일정합니다. 그래서 Ring은 대역폭 면에서 최적입니다.</li>
+    <li>예를 들어 7B 모델의 BF16 그래디언트는 14GB입니다. GPU 8장으로 Ring AllReduce를 하면, GPU 한 장이 약 24.5GB를 보냅니다.</li>
+  </ul></div>
+  <details>
+    <summary>Q. Ring AllReduce에서 GPU 수가 늘면 GPU당 송신량은 어떻게 되나요?</summary>
+  <div class="prose">
+  <p>2 곱하기 P 빼기 1 나누기 P 곱하기 N입니다. GPU 수가 늘수록 2N에 다가가서 거의 일정합니다. 대신 단계 수는 GPU 수에 비례해 늘어납니다.</p>
+  </div>
+  </details>
+  <details>
+    <summary>Q. nccl-tests 결과의 algbw와 busbw는 무엇이 다른가요?</summary>
+  <div class="prose">
+  <p>algbw는 데이터 크기를 걸린 시간으로 나눈 값입니다. busbw는 알고리즘 특성을 보정해서 하드웨어 링크가 실제로 얼마나 쓰였는지 나타낸 값이고, AllReduce에서는 algbw에 2 곱하기 P 빼기 1 나누기 P를 곱합니다. 하드웨어 성능과 비교할 때는 busbw를 봅니다.</p>
+  </div>
+  </details>
+</section>
+
+<section class="ch" id="s2-4">
+  <div class="ch-head"><span class="ch-num">2.4</span><h2>작동 방식</h2></div>
+  <p class="prose">GPU 4장으로 Ring AllReduce를 따라가 보겠습니다.</p>
+  <div class="prose"><ol>
+    <li><b>조각 나누기:</b> GPU마다 데이터를 4조각으로 나눕니다. 원형 순서는 GPU 0, 1, 2, 3, 다시 0입니다.</li>
+    <li><b>돌며 더하기:</b> 1단계부터 3단계까지 받은 조각에 자기 조각을 더해 다음 GPU로 넘깁니다. 여기까지가 ReduceScatter입니다.</li>
+    <li><b>돌며 복사하기:</b> 4단계부터 6단계까지는 완성된 조각을 그대로 다음 GPU로 넘깁니다. 여기까지가 AllGather입니다.</li>
+    <li><b>결과:</b> 모두 6단계, 즉 2 곱하기 P 빼기 1 단계 만에 모든 GPU가 같은 합을 갖습니다.</li>
+  </ol></div>
+  <pre><code>Ring (P=4): G0 → G1 → G2 → G3 → G0
+단계 1~3: ReduceScatter (조각을 넘기며 더함)
+단계 4~6: AllGather   (완성된 조각을 넘기며 복사)
+총 2(P−1) = 6 단계</code></pre>
+  <figure class="fig">
+    <div class="fig-title">GPU 4장 Ring으로 따라가 보기 (한 줄 = GPU 하나, 한 칸 = 조각 하나)</div>
+    <div class="seg" id="cr-op" aria-label="연산 고르기"></div>
+    <div class="seg" id="cr-step" aria-label="단계 이동"></div>
+    <div class="split">
+      <div class="scroll-x"><svg id="crSvg" viewBox="0 0 330 190" width="100%" role="img" aria-label="GPU 4장이 가진 조각 상태"></svg></div>
+      <div class="panel" id="crPanel" aria-live="polite"></div>
+    </div>
+    <div class="legend"><span><i class="sw" style="background:var(--idle)"></i>자기 원래 조각</span><span><i class="sw" style="background:var(--mem)"></i>일부만 더한 조각</span><span><i class="sw" style="background:var(--accent)"></i>완성된 조각 (전체 합 또는 모은 조각)</span><span><i class="sw" style="background:var(--tensor)"></i>이번 단계에 받은 칸</span></div>
+    <figcaption>a, b, c, d는 조각 이름이고 숫자는 그 값을 낸 GPU입니다. 각 단계에서 GPU마다 조각 하나, 즉 N/4씩을 다음 GPU로 보냅니다.</figcaption>
+  </figure>
+  <div class="prose"><ul>
+    <li>NCCL은 메시지 크기와 규모에 따라 Ring 대신 다른 알고리즘도 고릅니다.</li>
+    <li><b><button class="t" data-t="tree">Tree</button>:</b> 단계 수가 로그 P 수준이라 GPU가 많고 메시지가 작을 때 유리합니다.</li>
+    <li><b>NVLS와 SHARP:</b> 스위치가 합산을 맡아서 GPU가 보내는 양이 더 줄어듭니다.</li>
+  </ul></div>
+  <details>
+    <summary>Q. AllReduce는 왜 ReduceScatter와 AllGather를 합친 것과 같나요?</summary>
+  <div class="prose">
+  <p>먼저 데이터를 조각내서, 조각마다 맡은 GPU가 합계를 완성합니다. 이게 ReduceScatter입니다. 그다음 완성된 조각을 서로 나눠 가지면 모두가 전체 합계를 갖게 됩니다. 이게 AllGather입니다. Ring AllReduce가 실제로 이 두 단계로 구현됩니다.</p>
+  </div>
+  </details>
+</section>
+
+<section class="ch" id="s2-5">
+  <div class="ch-head"><span class="ch-num">2.5</span><h2>이점</h2></div>
+  <div class="prose"><ul>
+    <li><b>병목이 없습니다:</b> 중앙 서버 없이 모든 GPU가 똑같이 참여합니다.</li>
+    <li><b>대역폭을 끝까지 씁니다:</b> GPU당 송신량이 GPU 수와 상관없이 약 2N으로, 이론상 최적에 가깝습니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-6">
+  <div class="ch-head"><span class="ch-num">2.6</span><h2>부재 시 문제</h2></div>
+  <p class="prose">AllReduce가 없다고 가정해 보면, 이런 문제가 생깁니다.</p>
+  <div class="prose"><ul>
+    <li><button class="t" data-t="paramserver">Parameter Server</button> 방식으로 돌아가야 합니다. 서버 한 곳이 P 곱하기 N만큼 받아야 해서, GPU가 늘수록 느려집니다.</li>
+    <li>그래디언트를 맞추지 못하면 GPU마다 모델이 달라져서, 데이터 병렬 학습 자체가 성립하지 않습니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-7">
+  <div class="ch-head"><span class="ch-num">2.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>동기식입니다:</b> 가장 느린 GPU, 영어로 <button class="t" data-t="straggler">straggler</button>에 전체가 맞춰집니다.</li>
+    <li><b>대규모에서 지연이 늘어납니다:</b> Ring은 단계 수가 GPU 수에 비례합니다.</li>
+    <li><b>모델이 클수록 통신도 큽니다:</b> 매 스텝 모델 크기만큼 통신해서, 모델이 커질수록 통신 시간의 비중이 늘어납니다. 19회차 Communication Overhead에서 다룹니다.</li>
+  </ul></div>
+  <details>
+    <summary>Q. 집단 통신에서 GPU 하나만 느리면 어떻게 되나요?</summary>
+  <div class="prose">
+  <p>모든 GPU가 그 GPU를 기다립니다. 그래서 전체 속도가 떨어지고, 심하면 hang이나 타임아웃이 납니다.</p>
+  </div>
+  </details>
+</section>
+
+<section class="ch" id="s2-8">
+  <div class="ch-head"><span class="ch-num">2.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. 계산과 통신 겹치기</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> PyTorch DDP는 그래디언트를 버킷, 기본 25MB 단위로 묶습니다. 역전파 중에 먼저 끝난 버킷부터 AllReduce를 시작합니다.</li>
+    <li><b>해결하는 단점:</b> 통신 시간을 역전파 계산 뒤로 숨깁니다.</li>
+  </ul></div>
+  <h3>2. 계층적 AllReduce</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 서버 안에서 NVLink로 먼저 합치고, 서버 사이는 네트워크로 합친 뒤, 다시 서버 안에 퍼뜨립니다.</li>
+    <li><b>해결하는 단점:</b> 느린 서버 사이 구간을 짧게 씁니다. DGX H100에서 NVLink는 GPU당 한 방향 450GB/s이고, 서버 사이 NIC는 400Gb/s, 즉 50GB/s라 약 9배 차이가 납니다.</li>
+  </ul></div>
+  <h3>3. 스위치 안에서 합산</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> InfiniBand 스위치의 <button class="t" data-t="sharp">SHARP</button>, NVSwitch의 NVLink SHARP가 합산을 맡습니다.</li>
+    <li><b>해결하는 단점:</b> GPU가 보내는 양과 단계 수를 함께 줄입니다.</li>
+  </ul></div>
+  <h3>4. 보내는 양 줄이기</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> FP32 대신 BF16으로 통신하거나, PowerSGD처럼 그래디언트를 압축합니다.</li>
+    <li><b>해결하는 단점:</b> 모델이 클수록 통신이 커지는 문제를 줄입니다.</li>
+  </ul></div>
+  <h3>5. ReduceScatter와 AllGather로 나누기</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> ZeRO와 FSDP는 AllReduce를 두 연산으로 나눠 필요한 때에 따로 씁니다. PART 3과 4에서 보고, 자세한 내용은 18회차에서 다룹니다.</li>
+    <li><b>해결하는 단점:</b> GPU마다 모델 전체를 복제해야 하는 메모리 부담을 줄입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-9">
+  <div class="ch-head"><span class="ch-num">2.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>방식</th><th>GPU당 송신량</th><th>단계 수</th><th>특징</th></tr></thead>
+    <tbody>
+      <tr><td>Parameter Server</td><td>N (서버는 P×N 수신)</td><td class="num">2</td><td>단순, 비동기 가능 / 서버 병목</td></tr>
+      <tr><td>Ring AllReduce</td><td>2(P−1)/P × N</td><td>2(P−1)</td><td>대용량 메시지에서 대역폭 최적</td></tr>
+      <tr><td>Tree AllReduce</td><td>약 2N</td><td>약 2 log P</td><td>대규모·작은 메시지에서 지연 유리</td></tr>
+      <tr><td>SHARP, NVLS</td><td>약 N</td><td>적음</td><td>스위치가 합산, 송신량 절반</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>Ring AllReduce에서 GPU 한 장이 보내는 양은 GPU 수가 늘어도 약 2N으로 거의 일정합니다.</b> 대신 가장 느린 GPU에 전체가 맞춰지는 동기식입니다.</div>
+</section>
+
+<section class="ch" id="s2-10">
+  <div class="ch-head"><span class="ch-num">2.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. 작은 메시지의 지연을 줄입니다</h3>
+  <div class="prose"><ul>
+    <li>2025년 NCCL 2.27은 대칭 메모리, 영어로 <button class="t" data-t="symmem">symmetric memory</button>를 쓰는 저지연 AllReduce 커널을 넣었습니다. NVIDIA는 작은 메시지에서 지연이 최대 9배 줄었다고 밝혔습니다.</li>
+    <li>대칭 메모리는 모든 GPU가 같은 위치에 버퍼를 잡아 두는 방식입니다. 처음에는 NVL8이나 NVL72처럼 한 NVLink 도메인 안에서만 썼습니다.</li>
+    <li>2.31.2는 Blackwell에서 대칭 메모리용 TMA 커널을 기본으로 켰습니다.</li>
+  </ul></div>
+  <h3>2. 스위치가 더하는 범위가 넓어집니다</h3>
+  <div class="prose"><ul>
+    <li>Rubin 세대의 NVLink 6 Switch에는 SHARP 엔진이 들어 있어 스위치 안에서 합산과 멀티캐스트를 합니다.</li>
+    <li>NVIDIA는 Vera Rubin NVL72 랙의 스위치 안 연산 성능을 130 TFLOPS라고 밝혔습니다. GPU당 NVLink는 양방향 3.6TB/s입니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>AllReduce는 GPU끼리 주고받는 연산에서, 스위치가 함께 계산하는 연산으로 바뀌고 있습니다.</b></div>
+</section>
+
+<!-- ============ PART 3 ============ -->
+<div class="part" id="p3">
+  <div class="pk">PART 3</div>
+  <h2>AllGather</h2>
+  <p>여기까지가 AllReduce였습니다. 이제 AllReduce의 뒤쪽 절반, AllGather로 넘어가겠습니다. 모델이 커지면서 따로 떼어 쓰는 일이 많아진 연산입니다.</p>
+</div>
+
+<section class="ch" id="s3-1">
+  <div class="ch-head"><span class="ch-num">3.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="allgather">AllGather</button>는 <b>GPU마다 가진 서로 다른 조각을 모아, 모든 GPU가 전체 데이터를 갖게 하는 연산</b>입니다.</p>
+  <div class="prose"><ul>
+    <li>입력은 GPU마다 크기 N 나누기 P의 조각이고, 출력은 모든 GPU가 가진 크기 N의 전체입니다. 조각은 GPU 번호 순서대로 이어 붙습니다.</li>
+    <li>더하기 같은 계산은 없고, 복사와 전파만 합니다.</li>
+  </ul></div>
+  <details>
+    <summary>Q. AllGather와 Broadcast는 어떻게 다른가요?</summary>
+  <div class="prose">
+  <p>Broadcast는 루트라고 부르는 GPU 하나가 가진 데이터를 모두에게 복사합니다. AllGather는 모든 GPU가 각자 다른 조각을 내놓아, 모두가 전체를 갖습니다. Broadcast는 처음 가중치를 나눠 줄 때 주로 씁니다.</p>
+  </div>
+  </details>
+</section>
+
+<section class="ch" id="s3-2">
+  <div class="ch-head"><span class="ch-num">3.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li>모델이 GPU 한 장에 들어가지 않으면, 파라미터를 GPU마다 나눠 저장합니다. 이걸 <button class="t" data-t="sharding">샤딩</button>이라고 합니다.</li>
+    <li>그런데 계산할 때는 그 레이어의 파라미터 전체가 필요합니다.</li>
+  </ul></div>
+  <div class="callout idea"><span class="say">"그럼 평소에는 조각만 들고 있다가, 계산할 때만 모으자!"</span>그래서 등장한 것이 바로 <b>ZeRO-3와 FSDP</b>이고, 그 중심 연산이 <b>AllGather</b>입니다.<ul><li>2019년 Microsoft의 ZeRO 논문이 파라미터까지 GPU마다 나누는 3단계를 제안했습니다.</li><li>PyTorch는 같은 방식을 FSDP라는 이름으로 넣었습니다. 자세한 내용은 18회차에서 다룹니다.</li></ul></div>
+</section>
+
+<section class="ch" id="s3-3">
+  <div class="ch-head"><span class="ch-num">3.3</span><h2>구조</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>알고리즘</th><th>GPU당 송신량</th><th>단계 수</th><th>쓰는 경우</th></tr></thead>
+    <tbody>
+      <tr><td>Ring</td><td>(P−1)/P × N</td><td>P−1</td><td>큰 메시지</td></tr>
+      <tr><td><button class="t" data-t="pat">PAT</button></td><td>(P−1)/P × N</td><td>약 log P</td><td>대규모, 작은·중간 메시지</td></tr>
+    </tbody>
+  </table></div>
+  <div class="prose"><ul>
+    <li>Ring 방식은 P 빼기 1 단계 동안, 이웃에게 받은 조각을 다음 이웃에게 넘깁니다.</li>
+    <li>GPU 한 장이 보내는 양은 P 빼기 1 나누기 P 곱하기 N으로, AllReduce의 절반입니다.</li>
+    <li>GPU가 아주 많으면 단계 수가 문제라서, NCCL은 PAT처럼 단계 수를 로그 수준으로 줄이는 알고리즘을 씁니다. 3.10에서 봅니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-4">
+  <div class="ch-head"><span class="ch-num">3.4</span><h2>작동 방식</h2></div>
+  <p class="prose"><button class="t" data-t="fsdp">FSDP</button>의 순전파에서 AllGather가 쓰이는 순서입니다.</p>
+  <div class="prose"><ol>
+    <li><b>모으기:</b> 레이어를 실행하기 직전에, 그 레이어 파라미터를 AllGather로 모읍니다.</li>
+    <li><b>계산:</b> 모은 전체 파라미터로 레이어를 계산합니다.</li>
+    <li><b>버리기:</b> 계산이 끝나면 전체 파라미터를 바로 해제하고 자기 조각만 남깁니다.</li>
+    <li><b>미리 모으기:</b> 지금 레이어를 계산하는 동안 다음 레이어의 AllGather를 먼저 시작합니다. 이걸 prefetch라고 합니다.</li>
+  </ol></div>
+  <pre><code>shards = [torch.empty_like(local_shard) for _ in range(world_size)]
+dist.all_gather(shards, local_shard)          # 모두가 전체 조각 리스트를 가짐
+full = torch.cat(shards)
+# 텐서 하나로: dist.all_gather_into_tensor(full_tensor, local_shard)</code></pre>
+</section>
+
+<section class="ch" id="s3-5">
+  <div class="ch-head"><span class="ch-num">3.5</span><h2>이점</h2></div>
+  <div class="prose"><ul>
+    <li><b>메모리를 아낍니다:</b> 평소에는 조각만 보관합니다. GPU 8장이면 GPU당 파라미터 메모리가 8분의 1이 됩니다.</li>
+    <li><b>통신을 숨깁니다:</b> 다음 레이어의 AllGather를 지금 레이어 계산과 겹쳐서, 통신 시간이 잘 보이지 않습니다. 이 미리 모으기가 <button class="t" data-t="prefetch">prefetch</button>입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-6">
+  <div class="ch-head"><span class="ch-num">3.6</span><h2>부재 시 문제</h2></div>
+  <p class="prose">AllGather가 없다고 가정해 보면, 이런 문제가 생깁니다.</p>
+  <div class="prose"><ul>
+    <li>모델 파라미터를 GPU마다 모두 복제해야 합니다. 70B 모델은 BF16 파라미터만 140GB라서, H100 한 장의 80GB에 올라가지 않아 학습할 수 없습니다.</li>
+    <li>추론에서 GPU마다 나눠 계산한 결과, 예를 들어 <button class="t" data-t="tensorpar">텐서 병렬</button>의 출력을 다시 합칠 수단이 없습니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-7">
+  <div class="ch-head"><span class="ch-num">3.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>통신이 잦습니다:</b> 레이어마다 통신이 생겨서, 네트워크가 느리면 학습 속도가 크게 떨어집니다.</li>
+    <li><b>잠깐은 메모리가 더 듭니다:</b> 모은 전체 파라미터를 잠시 보관할 공간이 필요합니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-8">
+  <div class="ch-head"><span class="ch-num">3.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. Prefetch</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> FSDP의 <code>forward_prefetch</code>, <code>backward_prefetch</code>처럼 다음 레이어를 미리 모읍니다.</li>
+    <li><b>해결하는 단점:</b> 잦은 통신을 계산 뒤로 숨깁니다.</li>
+  </ul></div>
+  <h3>2. 계층적 샤딩</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> <button class="t" data-t="hsdp">HSDP</button>와 ZeRO++의 hpZ는 서버 안에서만 나누고, 서버 사이에는 복제해 둡니다.</li>
+    <li><b>해결하는 단점:</b> 느린 서버 사이 AllGather를 줄입니다.</li>
+  </ul></div>
+  <h3>3. 양자화 통신</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> ZeRO++의 qwZ는 파라미터를 INT8 등으로 줄여서 보냅니다.</li>
+    <li><b>해결하는 단점:</b> 보내는 양 자체를 줄입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-9">
+  <div class="ch-head"><span class="ch-num">3.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>방식</th><th>GPU당 파라미터 메모리</th><th>스텝당 통신량</th><th>특징</th></tr></thead>
+    <tbody>
+      <tr><td>완전 복제 (<button class="t" data-t="ddp">DDP</button>)</td><td>N</td><td>그래디언트 AllReduce 약 2N</td><td>단순, 메모리 많이 씀</td></tr>
+      <tr><td>완전 샤딩 (FSDP, ZeRO-3)</td><td>N/P</td><td>AllGather 2번 + ReduceScatter 1번 ≈ 3N</td><td>메모리 최소, 통신 약 1.5배</td></tr>
+      <tr><td>Broadcast</td><td>-</td><td>루트 한 곳에서 배포</td><td>한 GPU의 데이터를 모두에게, 초기화용</td></tr>
+    </tbody>
+  </table></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>AllGather는 메모리를 아끼려고 나눠 둔 파라미터를, 계산하는 순간에만 다시 모으는 연산입니다.</b></div>
+</section>
+
+<section class="ch" id="s3-10">
+  <div class="ch-head"><span class="ch-num">3.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. 대규모용 알고리즘 PAT</h3>
+  <div class="prose"><ul>
+    <li>2024년 NCCL 2.23이 AllGather와 ReduceScatter용 PAT, Parallel Aggregated Trees를 넣었습니다. 단계 수가 GPU 수의 로그 수준으로 늘어서, 작은 메시지와 중간 메시지에서 유리합니다. 처음에는 서버당 GPU 1개 구성만 지원했습니다.</li>
+    <li>2.31.2는 서버 안에서는 NVLS를, 서버 사이에서는 PAT를 쓰는 계층형 커널을 더했습니다. 기본으로는 꺼져 있습니다.</li>
+  </ul></div>
+  <h3>2. 새로운 AllGather 커널</h3>
+  <div class="prose"><ul>
+    <li>2.29.2는 서버 안 직접 접근과 GIN을 함께 쓰는 대칭 AllGather 커널을 넣었습니다.</li>
+    <li>1.10에서 본 복사 엔진 AllGather에 이어, 2.32.3은 ring 기반 계층형 복사 엔진 AllGather를 더했습니다.</li>
+  </ul></div>
+  <h3>3. FSDP2</h3>
+  <div class="prose"><ul>
+    <li>PyTorch의 새 FSDP인 FSDP2는 파라미터마다 <button class="t" data-t="dtensor">DTensor</button>로 0번 차원을 나눕니다. 예전 FSDP는 여러 텐서를 평평하게 이어 붙인 뒤 나눴습니다.</li>
+    <li>2025년 PyTorch 2.6 문서에서는 프로토타입이었고, 이후 버전 문서에서는 이 표시가 빠졌습니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>샤딩 학습이 주류가 되면서, AllGather 최적화가 AllReduce만큼 중요해졌습니다.</b></div>
+</section>
+
+<!-- ============ PART 4 ============ -->
+<div class="part" id="p4">
+  <div class="pk">PART 4</div>
+  <h2>ReduceScatter</h2>
+  <p>여기까지가 AllGather였습니다. 마지막으로 AllReduce의 앞쪽 절반, ReduceScatter로 넘어가겠습니다.</p>
+</div>
+
+<section class="ch" id="s4-1">
+  <div class="ch-head"><span class="ch-num">4.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="reducescatter">ReduceScatter</button>는 <b>모든 GPU의 데이터를 원소별로 합친 뒤, 그 결과를 조각내서 GPU마다 서로 다른 한 조각씩만 갖게 하는 연산</b>입니다.</p>
+  <div class="prose"><ul>
+    <li>입력은 GPU마다 크기 N이고, 출력은 GPU마다 크기 N 나누기 P입니다. 각 조각에는 그 부분의 전체 합이 들어 있습니다.</li>
+    <li>AllReduce의 앞쪽 절반으로, 합산과 분배를 한 번에 합니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s4-2">
+  <div class="ch-head"><span class="ch-num">4.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li>샤딩 학습에서 GPU는 자기가 맡은 파라미터 조각의 그래디언트만 있으면 됩니다.</li>
+    <li>AllReduce로 전체를 받으면, 쓰지 않을 나머지까지 받느라 통신과 메모리를 낭비합니다.</li>
+  </ul></div>
+  <div class="callout idea"><span class="say">"그럼 필요 없는 나머지는 받지 말고, 내 조각의 합만 받자!"</span>그래서 그래디언트 동기화에 등장한 것이 바로 <b>ReduceScatter</b>입니다.<ul><li><button class="t" data-t="zero">ZeRO</button>는 2단계부터 그래디언트를 ReduceScatter로 나눕니다.</li><li>FSDP의 역전파도 같은 방식입니다.</li></ul></div>
+</section>
+
+<section class="ch" id="s4-3">
+  <div class="ch-head"><span class="ch-num">4.3</span><h2>구조</h2></div>
+  <div class="prose"><ul>
+    <li>Ring 방식은 P 빼기 1 단계 동안 조각을 이웃에게 넘기며 더합니다.</li>
+    <li>GPU 한 장이 보내는 양은 P 빼기 1 나누기 P 곱하기 N으로, AllReduce의 절반입니다.</li>
+    <li>예를 들어 7B 모델의 <button class="t" data-t="bf16">BF16</button> 그래디언트 14GB를 GPU 8장으로 ReduceScatter하면, GPU 한 장이 약 12.25GB를 보냅니다. AllReduce의 24.5GB의 절반입니다.</li>
+  </ul></div>
+  <div class="tbl"><table>
+    <thead><tr><th>연산</th><th>GPU당 송신량</th><th>7B BF16 그래디언트, GPU 8장</th></tr></thead>
+    <tbody>
+      <tr><td>ReduceScatter</td><td>(P−1)/P × N</td><td class="num">약 12.25GB</td></tr>
+      <tr><td>AllReduce</td><td>2(P−1)/P × N</td><td class="num">약 24.5GB</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="ch" id="s4-4">
+  <div class="ch-head"><span class="ch-num">4.4</span><h2>작동 방식</h2></div>
+  <p class="prose">FSDP의 역전파에서 ReduceScatter가 쓰이는 순서입니다.</p>
+  <div class="prose"><ol>
+    <li><b>그래디언트 계산:</b> 레이어의 그래디언트를 계산합니다. 이때는 GPU마다 레이어 전체 크기의 그래디언트가 있습니다.</li>
+    <li><b>나눠 합치기:</b> ReduceScatter로 조각마다 모든 GPU의 합을 구해, 맡은 GPU에 줍니다.</li>
+    <li><b>버리기:</b> 자기 조각만 남기고 나머지 그래디언트는 해제합니다.</li>
+    <li><b>업데이트:</b> 옵티마이저는 자기 조각의 파라미터만 업데이트합니다.</li>
+  </ol></div>
+  <pre><code>out = torch.empty(N // world_size, device="cuda")
+dist.reduce_scatter_tensor(out, full_grad, op=dist.ReduceOp.SUM)
+# 각 GPU는 자기 담당 조각의 합산된 그래디언트만 가짐 → 자기 조각의 optimizer step만 수행</code></pre>
+  <p class="prose">2.4의 그림에서 ReduceScatter를 고르면, 이 나눠 합치기를 단계별로 볼 수 있습니다.</p>
+</section>
+
+<section class="ch" id="s4-5">
+  <div class="ch-head"><span class="ch-num">4.5</span><h2>이점</h2></div>
+  <div class="prose"><ul>
+    <li><b>절반만 보냅니다:</b> 통신량과 결과 메모리가 AllReduce의 절반입니다.</li>
+    <li><b>옵티마이저도 나눕니다:</b> <button class="t" data-t="optstate">옵티마이저 상태</button>를 조각별로 나눠 계산할 수 있습니다. ZeRO 1단계와 2단계의 핵심입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s4-6">
+  <div class="ch-head"><span class="ch-num">4.6</span><h2>부재 시 문제</h2></div>
+  <p class="prose">ReduceScatter가 없다고 가정해 보면, AllReduce를 한 뒤 필요한 부분만 잘라 써야 합니다. 그러면 통신이 2배가 되고, 그래디언트 전체를 담을 메모리도 필요합니다.</p>
+</section>
+
+<section class="ch" id="s4-7">
+  <div class="ch-head"><span class="ch-num">4.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>결과가 조각입니다:</b> 전체가 필요하면 결국 AllGather를 한 번 더 해야 합니다.</li>
+    <li><b>패딩이 필요할 수 있습니다:</b> 텐서 크기가 GPU 수로 나누어떨어지지 않으면 빈 값을 채워 맞춥니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s4-8">
+  <div class="ch-head"><span class="ch-num">4.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. 스위치 안에서 합산</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> <button class="t" data-t="sharp">SHARP</button>와 NVLS로 스위치가 합산합니다.</li>
+    <li><b>해결하는 단점:</b> GPU가 보내는 양과 단계를 줄입니다.</li>
+  </ul></div>
+  <h3>2. 계층적 ReduceScatter</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 서버 안 단계와 서버 사이 단계를 나눠 수행합니다.</li>
+    <li><b>해결하는 단점:</b> 느린 서버 사이 구간을 짧게 씁니다.</li>
+  </ul></div>
+  <h3>3. 저정밀 통신</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 그래디언트를 BF16으로 보냅니다. FP32보다 절반입니다.</li>
+    <li><b>해결하는 단점:</b> 보내는 양 자체를 줄입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s4-9">
+  <div class="ch-head"><span class="ch-num">4.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>연산</th><th>출력</th><th>GPU당 송신량</th><th>쓰는 곳</th></tr></thead>
+    <tbody>
+      <tr><td>Reduce</td><td>루트 1개만 전체 합</td><td>약 N</td><td>결과를 한 곳에서만 쓸 때</td></tr>
+      <tr><td>ReduceScatter</td><td>모두가 합의 1/P 조각</td><td>(P−1)/P × N</td><td>ZeRO·FSDP 그래디언트</td></tr>
+      <tr><td>AllReduce</td><td>모두가 전체 합</td><td>2(P−1)/P × N</td><td>DDP, 텐서 병렬</td></tr>
+    </tbody>
+  </table></div>
+  <details>
+    <summary>Q. DDP와 FSDP는 각각 어떤 집단 연산을 주로 쓰나요?</summary>
+  <div class="prose">
+  <p>DDP는 그래디언트를 AllReduce로 맞춥니다. FSDP는 파라미터를 AllGather로 모으고, 그래디언트를 ReduceScatter로 나눕니다.</p>
+  </div>
+  </details>
+  <details>
+    <summary>Q. FSDP가 DDP보다 통신이 많다는데 왜 쓰나요?</summary>
+  <div class="prose">
+  <p>DDP는 스텝마다 AllReduce 한 번, 약 2N을 보냅니다. 대신 모든 GPU가 모델 전체와 옵티마이저 상태를 복제합니다. FSDP는 AllGather 두 번과 ReduceScatter 한 번, 약 3N으로 통신이 약 1.5배입니다. 그 대신 메모리가 GPU 수만큼 줄어서, DDP로는 아예 올라가지 않는 큰 모델을 학습할 수 있습니다.</p>
+  </div>
+  </details>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>ReduceScatter는 AllReduce의 앞쪽 절반이고, 통신량도 절반입니다.</b> 자기 조각만 책임지는 샤딩 학습에서는 AllReduce 대신 ReduceScatter를 씁니다.</div>
+</section>
+
+<section class="ch" id="s4-10">
+  <div class="ch-head"><span class="ch-num">4.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. 계층형 ReduceScatter 커널</h3>
+  <div class="prose"><ul>
+    <li>NCCL 2.29.7은 서버 안 직접 접근과 <button class="t" data-t="gin">GIN</button>을 함께 쓰는 대칭 ReduceScatter 커널을 넣었습니다. 대칭 메모리 등록과 GIN 지원이 필요합니다.</li>
+    <li>3.10에서 본 2.31.2의 계층형 PAT 커널도 ReduceScatter에 함께 쓰입니다.</li>
+  </ul></div>
+  <h3>2. 샤딩 학습이 기본이 됩니다</h3>
+  <div class="prose"><ul>
+    <li>FSDP2는 순전파 전에 파라미터를 모으고, 역전파 뒤에 그래디언트를 ReduceScatter로 나눕니다.</li>
+    <li>그래서 대규모 학습에서는 AllReduce보다 AllGather와 ReduceScatter의 성능이 학습 속도를 좌우하는 경우가 늘었습니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>NCCL의 새 커널은 AllReduce만큼 ReduceScatter와 AllGather를 함께 다듬고 있습니다.</b></div>
+  <p class="prose">여기까지가 10회차였습니다. 오늘은 집단 통신을 수행하는 NCCL과, 그 대표 연산인 AllReduce, AllGather, ReduceScatter를 봤습니다. 다음 11회차에서는 서버와 서버를 잇는 네트워크, InfiniBand와 Ethernet, RoCE, RDMA, 그리고 NIC와 HCA를 봅니다. 오늘 본 NCCL의 NET 전송 계층이 바로 그 네트워크 위에서 돕니다.</p>
+</section>
+
+<section class="ch" id="refs">
+  <div class="ch-head"><span class="ch-num">+</span><h2>참고</h2></div>
+  <div class="prose"><ul>
+    <li><a href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/index.html" target="_blank" rel="noopener">NCCL 공식 문서</a></li>
+    <li><a href="https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/usage/deviceapi.html" target="_blank" rel="noopener">NCCL Device-Initiated Communication (Device API, GIN)</a></li>
+    <li><a href="https://docs.nvidia.com/deeplearning/nccl/release-notes/rel_2-28-3.html" target="_blank" rel="noopener">NCCL Release 2.28.3 (Device API)</a></li>
+    <li><a href="https://docs.nvidia.com/deeplearning/nccl/release-notes/rel_2-28-7.html" target="_blank" rel="noopener">NCCL Release 2.28.7 (GPU-Initiated Networking)</a></li>
+    <li><a href="https://developer.nvidia.com/blog/fusing-communication-and-compute-with-new-device-api-and-copy-engine-collectives-in-nvidia-nccl-2-28/" target="_blank" rel="noopener">Fusing Communication and Compute with New Device API and Copy Engine Collectives in NCCL 2.28 (NVIDIA, 2025.11)</a></li>
+    <li><a href="https://docs.nvidia.com/deeplearning/nccl/release-notes/rel_2-29-2.html" target="_blank" rel="noopener">NCCL Release 2.29.2 (ncclCommGrow, NCCL4Py, 대칭 AllGather 커널)</a></li>
+    <li><a href="https://docs.nvidia.com/deeplearning/nccl/release-notes/rel_2-29-7.html" target="_blank" rel="noopener">NCCL Release 2.29.7 (포트 failover, 계층형 ReduceScatter, Apache 2.0)</a></li>
+    <li><a href="https://docs.nvidia.com/deeplearning/nccl/release-notes/rel_2-30-3.html" target="_blank" rel="noopener">NCCL Release 2.30.3 (IB 포트 복구, 여러 NVLink 도메인)</a></li>
+    <li><a href="https://docs.nvidia.com/deeplearning/nccl/release-notes/rel_2-30-7.html" target="_blank" rel="noopener">NCCL Release 2.30.7 (계층형 zero-SM 집단 통신)</a></li>
+    <li><a href="https://docs.nvidia.com/deeplearning/nccl/release-notes/rel_2-31-2.html" target="_blank" rel="noopener">NCCL Release 2.31.2 (계층형 PAT, Blackwell TMA 커널)</a></li>
+    <li><a href="https://docs.nvidia.com/deeplearning/nccl/archives/nccl_2323/release-notes/rel_2-32-3.html" target="_blank" rel="noopener">NCCL Release 2.32.3 (Vera Rubin 지원, 계층형 복사 엔진 AllGather)</a></li>
+    <li><a href="https://developer.nvidia.com/blog/enabling-fast-inference-and-resilient-training-with-nccl-2-27" target="_blank" rel="noopener">Enabling Fast Inference and Resilient Training with NCCL 2.27 (대칭 메모리 AllReduce)</a></li>
+    <li><a href="https://developer.nvidia.com/blog/new-scaling-algorithm-and-initialization-with-nvidia-collective-communications-library-2-23" target="_blank" rel="noopener">New Scaling Algorithm and Initialization with NCCL 2.23 (PAT)</a></li>
+    <li><a href="https://arxiv.org/html/2506.20252v1" target="_blank" rel="noopener">PAT: a new algorithm for all-gather and reduce-scatter operations at scale (arXiv 2506.20252)</a></li>
+    <li><a href="https://developer.nvidia.com/blog/nvidia-nvlink-the-scale-up-network-for-ai-factories/" target="_blank" rel="noopener">NVIDIA NVLink: The Scale-Up Network for AI Factories (NVLink 6 Switch SHARP)</a></li>
+    <li><a href="https://docs.pytorch.org/docs/stable/distributed.fsdp.fully_shard.html" target="_blank" rel="noopener">PyTorch FSDP2 fully_shard 문서</a></li>
+    <li><a href="https://github.com/NVIDIA/nccl-tests" target="_blank" rel="noopener">nccl-tests (성능 측정 도구)</a></li>
+    <li><a href="https://pytorch.org/tutorials/beginner/dist_overview.html" target="_blank" rel="noopener">PyTorch Distributed Overview</a></li>
+  </ul></div>
+</section>
+
+<nav class="pager" id="pager" data-no="10" aria-label="회차 이동"></nav>
+</main>
+</div>
+
+<footer class="site"><div class="container">자료의 오류나 보충할 내용은 <a href="https://github.com/designerbohyun/domain-study/issues">GitHub 이슈</a>로 알려 주세요.</div></footer>
+<script src="../assets/terms.js"></script>
+<script src="../assets/sessions.js"></script>
+<script src="../assets/site.js"></script>
+<script src="10.js"></script>
+<script type="module">
+import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.esm.min.mjs";
+const t = document.documentElement.getAttribute("data-theme");
+const dark = t ? t === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+mermaid.initialize({ startOnLoad: false, theme: dark ? "dark" : "neutral", fontFamily: "inherit" });
+// ponytail: theme set at load; toggling theme needs a reload to recolor diagrams
+let i = 0;
+for (const el of document.querySelectorAll("pre.mermaid")) {
+  const { svg } = await mermaid.render("mmd" + i++, el.textContent);
+  const box = document.createElement("div");
+  box.className = "mmd";
+  box.innerHTML = svg;
+  el.replaceWith(box);
+}
+</script>
+</body>
+</html>

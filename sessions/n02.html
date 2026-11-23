@@ -799,35 +799,6 @@
   </ul></div>
 </section>
 
-<!-- ============ PART 7 : AstraBase에서는 ============ -->
-<div class="part" id="p7">
-  <div class="pk">PART 7</div>
-  <h2>AstraBase에서는</h2>
-  <p>마지막으로 오늘 본 길들이 AstraBase에 어떻게 들어가 있는지 맞춰 보겠습니다.</p>
-</div>
-
-<section class="ch" id="s7-1">
-  <div class="ch-head"><span class="ch-num">7.1</span><h2>학습 포인트별 연결</h2></div>
-  <p>이 스터디의 <button class="t" data-t="mgmtzone">관리 존</button>은 정책 문서에서 관리 영역이라고 부릅니다. 아래 내용은 ASB-POL-0001 역할·권한 정책과 ASB-POL-0003 용어 정책을 기준으로 정리했습니다.</p>
-  <div class="prose"><ol>
-    <li><b>유일한 입구, 그리고 헤드 노드 겸용:</b> 관리 존마다 장비에 닿는 접속 경로를 직결과 점프 서버 중에서 고릅니다. 관리 대상 서버 하나를 "점프 서버 겸용 서버"로 지정할 수도 있습니다. PART 1의 1.3에서 본 HPC 헤드 노드가 이 경우입니다.</li>
-    <li><b>바깥에서 안으로 들어오는 다른 길:</b> 외부 포트 화면의 포트 포워딩입니다. PART 6입니다.</li>
-    <li><b>막는 일이 어디에서 일어나나:</b> 세 곳입니다. 스위치의 접근 제어 규칙이 망 사이를 막고, 점프 서버의 SSH 인증이 사람과 서비스를 막고, 게이트웨이의 출발지 제한이 바깥을 막습니다.</li>
-    <li><b>길이 끊기면 뒤쪽이 통째로 안 보인다:</b> PART 5의 관리망 단일 장애점입니다.</li>
-  </ol></div>
-</section>
-
-<section class="ch" id="s7-2">
-  <div class="ch-head"><span class="ch-num">7.2</span><h2>정책에 나타난 개념</h2></div>
-  <div class="prose"><ul>
-    <li><b>연결 테스트 4단계:</b> 점프 서버 연결 테스트는 응답, <button class="t" data-t="hostkey">호스트 키</button>, 인증, TCP 포워딩 순서로 확인합니다. PART 1의 1.4 작동 방식 2번부터 4번, PART 2의 호스트 키와 공개키 인증이 그대로 들어 있습니다.</li>
-    <li><b>실패 사유도 같은 4가지:</b> 응답 없음, 호스트 키 변경, 인증 실패, TCP 포워딩 거부입니다. 어느 단계에서 막혔는지 보고 원인을 좁힙니다.</li>
-    <li><b>호스트 키 다시 승인은 Super Admin만:</b> 접속 대상을 믿을지 바꾸는 일이라서입니다. PART 2의 2.4 Q에서 본 중간자 공격 위험 때문입니다.</li>
-    <li><b>접속 경로 설정과 겸용 서버의 전원 제어는 Super Admin만:</b> 점프 서버 겸용 서버를 끄거나 재시작하면 관리 존 전체가 안 보이게 됩니다. BMC 전원 제어 같은 우회 경로로 끄는 것도 같은 권한으로 막습니다. PART 5의 단일 장애점을 권한으로 지키는 셈입니다.</li>
-  </ul></div>
-  <div class="callout"><span class="ck">꼭 알아 둘 것</span>AstraBase에서 점프 서버는 단순한 접속 설정이 아니라 <b>관리 존 전체로 가는 유일한 길</b>입니다. 그래서 그 길을 바꾸거나 끊는 일은 가장 높은 권한에만 열려 있습니다.</div>
-</section>
-
 <section class="ch" id="refs">
   <div class="ch-head"><span class="ch-num">+</span><h2>참고</h2></div>
   <div class="prose"><ul>

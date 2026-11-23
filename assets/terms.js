@@ -280,7 +280,6 @@ window.TERMS = {
  bmc:{n:"BMC",c:"관리",d:"Baseboard Management Controller. 서버 메인보드에 붙은 관리 전용 컴퓨터입니다. 서버가 꺼져 있어도 전원 제어, 원격 콘솔, 센서 읽기를 합니다.",s:["N1","N2"]},
  ipmi:{n:"IPMI",c:"관리",d:"BMC와 대화하는 표준입니다. 1998년 1.0이 나왔습니다.",s:["N1","N2"]},
  redfish:{n:"Redfish",c:"관리",d:"DMTF가 만든 BMC 관리 표준입니다. HTTPS와 JSON으로 BMC를 다루며, IPMI의 뒤를 잇습니다.",s:["N1"]},
- mgmtzone:{n:"관리 영역 (관리 존)",c:"관리",d:"AstraBase가 장비에 닿는 접속 경로를 기준으로 묶은 경계입니다. AICM의 '클러스터'를 바꾼 이름이고, 접속 방식은 바로 접속과 점프 서버 두 가지입니다.",s:["N1","N2"]},
  jumpserver:{n:"점프 서버 (Bastion Host)",c:"보안",d:"바깥에서 내부망 장비로 접속할 때 반드시 거쳐 가는 단 하나의 중계 서버입니다. 안쪽 장비는 점프 서버에서 오는 접속만 받습니다.",s:["N2"]},
  proxyjump:{n:"ProxyJump (ssh -J)",c:"보안",d:"점프 서버가 TCP 연결만 이어 주고, 인증은 사용자 PC와 대상 장비가 직접 하는 SSH 접속 방식입니다. 2016년 OpenSSH 7.3에 들어갔습니다.",s:["N2"]},
  sshkey:{n:"SSH 공개키 인증",c:"보안",d:"비밀번호 대신 키 한 쌍으로 로그인하는 방식입니다. 서버가 낸 값에 개인키로 서명하고, 서버는 authorized_keys의 공개키로 확인합니다.",s:["N2"]},

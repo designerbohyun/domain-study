@@ -1,0 +1,859 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>2회차 · 경계를 넘는 길 · 네트워크 도메인 스터디</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.0.6/css/pico.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="../assets/site.css">
+<script>try{var t=localStorage.getItem("theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+</head>
+<body data-root="..">
+<header class="site"><nav class="container">
+  <ul><li><a class="brand" href="../">도메인 스터디</a></li></ul>
+  <ul><li><a href="../">GPU 스터디</a></li><li><a href="../network.html">네트워크 스터디</a></li><li><a href="../structure.html">구조도</a></li><li><a href="../glossary.html">용어 사전</a></li></ul>
+</nav></header>
+
+<div class="container doc">
+<aside class="toc"><details open><summary>이 회차 목차</summary><ol id="toc"></ol></details></aside>
+<main>
+<header class="doc-head">
+  <div class="crumb"><a href="../network.html">네트워크 스터디</a> / 논리적 경계 / 2회차</div>
+  <h1>2회차 · 경계를 넘는 길</h1>
+  <p>지난 1회차에서는 경계가 무엇으로 그어지는지 봤습니다. 오늘은 그 경계를 넘어 장비에 닿는 길을 봅니다. 입구인 점프 서버, 입구에서 신원을 확인하는 SSH 공개키 인증, 허용하지 않은 길은 모두 막는 기본 거부, 그 길이 깔리는 폐쇄망과 관리망, 그리고 길이 하나뿐일 때의 위험인 단일 장애점 순서로 보겠습니다. NAT 포트 포워딩은 끝에서 짧게 봅니다.</p>
+  <p>오늘의 핵심 질문은 <b>"우리 서비스는 방화벽 안쪽 장비에 어떻게 말을 거나?"</b>입니다.</p>
+  <div class="flow" aria-label="주제별 진행 순서">
+    <span><b>1</b>정의</span><span><b>2</b>등장 배경</span><span><b>3</b>구조</span><span><b>4</b>작동 방식</span><span><b>5</b>이점</span><span><b>6</b>부재 시 문제</span><span><b>7</b>단점</span><span><b>8</b>대안 기술</span><span><b>9</b>대안과의 비교</span><span><b>10</b>최신 트렌드</span>
+  </div>
+</header>
+
+<!-- ============ PART 1 : 점프 서버 ============ -->
+<div class="part" id="p1">
+  <div class="pk">PART 1</div>
+  <h2>점프 서버 (Jump Server, Bastion Host)</h2>
+  <p>먼저 경계를 넘는 입구부터 보겠습니다.</p>
+</div>
+
+<section class="ch" id="s1-1">
+  <div class="ch-head"><span class="ch-num">1.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="jumpserver">점프 서버</button>는 <b>바깥에서 내부망 장비로 접속할 때 반드시 거쳐 가는 단 하나의 중계 서버</b>입니다.</p>
+  <div class="prose"><ul>
+    <li>배스천 호스트라고도 부릅니다. 성벽에서 가장 튼튼하게 쌓은 돌출부, 즉 보루를 뜻하는 bastion에서 온 이름입니다.</li>
+    <li>사용자는 점프 서버를 먼저 통과하고, 거기서 안쪽 장비로 다시 접속합니다.</li>
+    <li>안쪽 장비는 바깥에 포트를 열지 않습니다. 점프 서버에서 오는 접속만 받습니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-2">
+  <div class="ch-head"><span class="ch-num">1.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li>1990년 전후로 회사와 연구소의 내부망이 인터넷에 붙기 시작했습니다.</li>
+    <li>내부 서버마다 바깥 접속을 허용하면 지켜야 할 서버가 수십, 수백 대가 됩니다. 그 모두를 제때 패치하고 감시하기는 어려웠습니다.</li>
+  </ul></div>
+  <div class="callout idea">
+    <span class="say">"그럼 바깥에 드러나는 서버를 한 대로 줄이고, 그 한 대만 단단히 지키자!"</span>
+    그래서 등장한 것이 바로 <b>점프 서버</b>입니다.
+    <ul>
+      <li>배스천 호스트라는 말은 1990년 Marcus Ranum의 방화벽 글에서 처음 쓰인 것으로 알려져 있습니다. 같은 해 그가 설계에 참여한 DEC SEAL이 첫 상용 배스천 호스트 방화벽으로 꼽힙니다.</li>
+      <li>2016년 8월 OpenSSH 7.3이 ProxyJump 옵션, 즉 <code>ssh -J</code>를 넣으면서 점프 서버를 거치는 접속이 명령 한 줄이 됐습니다.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="ch" id="s1-3">
+  <div class="ch-head"><span class="ch-num">1.3</span><h2>구조</h2></div>
+  <h3>1. 구성 요소</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>구성</th><th>하는 일</th><th>예시</th></tr></thead>
+    <tbody>
+      <tr><td>점프 서버</td><td>바깥 망과 관리망 양쪽에 걸쳐 있으면서 접속을 받아 안쪽으로 넘깁니다</td><td>NIC 2개 (외부 쪽, 관리망 쪽)</td></tr>
+      <tr><td>접속 포트</td><td>바깥에 연 유일한 문</td><td>SSH 22번</td></tr>
+      <tr><td>점프 서버 계정과 키</td><td>점프 서버에 들어가는 사람이나 서비스의 신원</td><td>운영자 계정, 공개키</td></tr>
+      <tr><td>호스트 키</td><td>점프 서버가 진짜 그 서버인지 증명하는 서버 쪽 키</td><td>ED25519 호스트 키</td></tr>
+      <tr><td>대상 장비</td><td>점프 서버 뒤에 있는 서버, 스위치, BMC</td><td>관리망 IP</td></tr>
+      <tr><td>접속 기록</td><td>누가 언제 어디로 들어갔는지 남기는 로그</td><td>sshd 로그, 세션 녹화</td></tr>
+    </tbody>
+  </table></div>
+  <p class="muted">표의 값은 예시입니다.</p>
+  <h3>2. 안으로 넘어가는 두 가지 방식</h3>
+  <div class="prose"><ul>
+    <li><b>두 번 로그인:</b> 점프 서버에 셸로 들어간 뒤, 거기서 다시 <code>ssh</code>를 칩니다. 안쪽 장비용 개인키를 점프 서버에 둬야 해서, 점프 서버가 뚫리면 키도 함께 넘어갑니다.</li>
+    <li><b>중계만 하기 (<button class="t" data-t="proxyjump">ProxyJump</button>):</b> 점프 서버는 TCP 연결만 이어 주고, 인증은 사용자 PC와 대상 장비가 직접 합니다. 키가 점프 서버에 남지 않습니다. 대신 점프 서버가 TCP 포워딩을 허용해야 합니다.</li>
+  </ul></div>
+  <h3>3. 점프 서버 겸용 서버</h3>
+  <div class="prose"><ul>
+    <li>점프 서버를 따로 두지 않고, 관리 대상 서버 하나가 점프 서버를 겸하기도 합니다.</li>
+    <li>HPC 클러스터의 헤드 노드, 즉 로그인 노드가 대표적입니다. 사용자 로그인, 작업 스케줄러, 계산 노드로의 중계를 한 서버가 함께 맡습니다.</li>
+    <li>이 서버를 끄거나 재시작하면 뒤쪽 장비 전체로 가는 길도 함께 끊깁니다. PART 5에서 다시 봅니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-4">
+  <div class="ch-head"><span class="ch-num">1.4</span><h2>작동 방식</h2></div>
+  <p>ProxyJump 방식으로 대상 장비 하나에 들어가는 과정입니다.</p>
+  <div class="prose"><ol>
+    <li><b>점프 서버 연결:</b> 사용자 PC가 점프 서버의 22번 포트로 TCP 연결을 엽니다.</li>
+    <li><b>점프 서버 확인:</b> 점프 서버가 <button class="t" data-t="hostkey">호스트 키</button>로 서명한 값을 보내고, PC는 전에 믿기로 한 키와 같은지 비교합니다. 다르면 경고하고 멈춥니다.</li>
+    <li><b>사용자 인증:</b> 점프 서버 계정으로 공개키 인증을 합니다. PART 2에서 봅니다.</li>
+    <li><b>중계 요청:</b> PC가 점프 서버에 "대상 장비의 IP와 포트로 연결을 열어 달라"고 요청합니다. 점프 서버가 TCP 포워딩을 허용하지 않으면 여기서 막힙니다.</li>
+    <li><b>대상 접속:</b> 그 통로 안에서 PC와 대상 장비가 SSH 연결을 새로 맺습니다. 점프 서버는 통로만 이어 줄 뿐, 암호화된 내용은 보지 못합니다.</li>
+    <li><b>기록:</b> 점프 서버는 누가 어느 장비로 중계를 요청했는지 로그에 남깁니다.</li>
+  </ol></div>
+  <details>
+    <summary>Q. 명령으로는 어떻게 쓰나요?</summary>
+    <div class="prose"><p><code>ssh -J ops@jump.example.com admin@10.0.0.21</code>처럼 씁니다. 앞이 점프 서버, 뒤가 대상 장비입니다. 쉼표로 이어서 점프 서버를 여러 단계 거칠 수도 있습니다. 주소와 계정은 예시입니다.</p></div>
+  </details>
+</section>
+
+<section class="ch" id="s1-5">
+  <div class="ch-head"><span class="ch-num">1.5</span><h2>이점</h2></div>
+  <div class="prose"><ul>
+    <li><b>공격받는 면이 줄어듭니다:</b> 바깥에 열린 포트가 장비 수백 대에서 점프 서버의 22번 하나로 줄어듭니다.</li>
+    <li><b>한 곳에서 통제합니다:</b> 퇴사자 계정 회수, 키 교체, 접속 차단을 점프 서버 한 대에서 합니다.</li>
+    <li><b>한 곳에서 기록합니다:</b> 누가 어느 장비에 들어갔는지 점프 서버 로그 하나로 확인합니다.</li>
+    <li><b>내부 주소를 숨깁니다:</b> 바깥에서는 점프 서버 주소만 보입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-6">
+  <div class="ch-head"><span class="ch-num">1.6</span><h2>부재 시 문제</h2></div>
+  <p>점프 서버가 없다고 가정해 보면 이런 일이 생깁니다.</p>
+  <div class="prose"><ul>
+    <li>장비마다 바깥으로 포트를 열거나, 장비 수만큼 <button class="t" data-t="portfwd">포트 포워딩</button> 규칙을 만들어야 합니다.</li>
+    <li>사람이 바뀔 때마다 장비 하나하나에서 계정과 키를 지워야 합니다. 한 대쯤 빠지기 쉽습니다.</li>
+    <li>점검 때 "누가 들어갔나"를 확인하려면 장비마다 로그를 따로 모아야 합니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-7">
+  <div class="ch-head"><span class="ch-num">1.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>가장 노리는 표적:</b> 점프 서버가 뚫리면 안쪽 전체로 가는 길이 열립니다. 2024년 7월 공개된 OpenSSH 취약점 regreSSHion, CVE-2024-6387처럼 sshd 자체에 구멍이 나오면 점프 서버가 1순위 표적이 됩니다.</li>
+    <li><b><button class="t" data-t="spof">단일 장애점</button>:</b> 점프 서버가 멈추면 아무도 안으로 못 들어갑니다. PART 5에서 봅니다.</li>
+    <li><b>키 관리 부담:</b> 점프 서버와 장비에 흩어진 키를 관리해야 합니다. PART 2의 2.7에서 봅니다.</li>
+    <li><b>한 번 더 거쳐야 함:</b> 접속 단계가 늘고, 파일 전송이나 GUI 도구 연결이 번거로워집니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-8">
+  <div class="ch-head"><span class="ch-num">1.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. 관리형 배스천 (Azure Bastion, AWS Session Manager)</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 클라우드가 대신 운영하는 점프 서버입니다. AWS Session Manager는 인바운드 포트를 열지 않고, 서버의 에이전트가 바깥으로 연결을 겁니다.</li>
+    <li><b>해결하는 단점:</b> 가장 노리는 표적. 패치와 운영을 클라우드가 맡고, 열린 포트가 없습니다.</li>
+  </ul></div>
+  <h3>2. 접근 프록시와 짧은 수명의 인증서 (Teleport 등)</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 사용자가 회사 계정으로 로그인하면 몇 시간짜리 인증서를 받아 장비에 접속하는 방식입니다. 세션 녹화와 역할별 접근 범위를 함께 제공합니다.</li>
+    <li><b>해결하는 단점:</b> 키 관리 부담. 오래 남는 키가 없습니다.</li>
+  </ul></div>
+  <h3>3. 점프 서버 이중화</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 점프 서버를 두 대 이상 두고, 한 대가 멈추면 다른 한 대로 들어가게 하는 방식입니다.</li>
+    <li><b>해결하는 단점:</b> 단일 장애점.</li>
+  </ul></div>
+  <h3>4. VPN</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 사용자 PC를 내부망에 직접 붙여 주는 암호화 터널입니다.</li>
+    <li><b>해결하는 단점:</b> 한 번 더 거쳐야 함. 다만 들어간 뒤에는 망 전체에 닿을 수 있어서 ACL로 범위를 다시 좁혀야 합니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-9">
+  <div class="ch-head"><span class="ch-num">1.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>구분</th><th>자체 점프 서버</th><th>관리형 배스천</th><th>접근 프록시 (Teleport 등)</th><th>VPN</th></tr></thead>
+    <tbody>
+      <tr><td>바깥에 여는 것</td><td>SSH 포트 1개</td><td>클라우드 콘솔, 또는 없음</td><td>프록시 포트 1개</td><td>VPN 포트 1개</td></tr>
+      <tr><td>인증</td><td>계정과 키</td><td>클라우드 IAM</td><td>SSO와 짧은 인증서</td><td>VPN 계정, 인증서</td></tr>
+      <tr><td>들어간 뒤 범위</td><td>점프 서버가 닿는 곳 전부</td><td>지정한 인스턴스</td><td>역할로 허용한 장비</td><td>망 전체 (ACL로 제한)</td></tr>
+      <tr><td>기록</td><td>sshd 로그, 녹화는 따로</td><td>클라우드 감사 로그</td><td>세션 녹화 포함</td><td>연결 기록 중심</td></tr>
+      <tr><td>폐쇄망에서</td><td>쓸 수 있음</td><td>어려움 (클라우드 연결 필요)</td><td>자체 설치하면 쓸 수 있음</td><td>쓸 수 있음</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="ch" id="s1-10">
+  <div class="ch-head"><span class="ch-num">1.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. 점프 서버를 없애는 쪽으로 (2024년부터 2025년)</h3>
+  <div class="prose"><ul>
+    <li>Teleport, Twingate 같은 접근 제품들은 점프 서버를 단단하게 만드는 대신 아예 없애자고 말합니다. 사람마다 신원으로 인증하고, 짧게 끝나는 인증서를 쓰고, 인바운드 포트를 열지 않는 방식입니다.</li>
+    <li>다만 이 흐름의 근거는 대부분 업체 자료입니다. 폐쇄망처럼 클라우드에 닿을 수 없는 곳에서는 여전히 자체 점프 서버가 기본입니다.</li>
+  </ul></div>
+  <h3>2. sshd 자체가 표적이 됨 (2024년)</h3>
+  <div class="prose"><ul>
+    <li>2024년 7월 공개된 regreSSHion은 glibc 기반 리눅스의 OpenSSH 서버에서 인증 없이 원격 코드를 실행할 수 있는 취약점이었습니다.</li>
+    <li>바깥에 SSH를 연 서버는 점프 서버뿐이어야 하고, 그 점프 서버는 가장 먼저 패치해야 한다는 점을 다시 보여 줬습니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span>점프 서버는 입구를 하나로 모아 지키기 쉽게 만듭니다. <b>대신 그 하나가 망에서 가장 중요한 서버가 됩니다.</b></div>
+</section>
+
+<!-- ============ PART 2 : SSH 공개키 인증 ============ -->
+<div class="part" id="p2">
+  <div class="pk">PART 2</div>
+  <h2>SSH 공개키 인증 (SSH Public Key Authentication)</h2>
+  <p>여기까지가 입구였습니다. 이제 그 입구에서 "누구인지"를 확인하는 SSH 공개키 인증으로 넘어가겠습니다.</p>
+</div>
+
+<section class="ch" id="s2-1">
+  <div class="ch-head"><span class="ch-num">2.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="sshkey">SSH 공개키 인증</button>은 <b>비밀번호 대신 키 한 쌍으로 "내가 맞다"를 증명하는 로그인 방식</b>입니다.</p>
+  <div class="prose"><ul>
+    <li>개인키는 사용자만 갖고, 공개키는 서버의 <code>authorized_keys</code> 파일에 넣어 둡니다.</li>
+    <li>서버가 낸 값에 사용자가 개인키로 서명하고, 서버는 공개키로 그 서명을 확인합니다. 개인키는 망으로 나가지 않습니다.</li>
+    <li>서버도 호스트 키로 자기가 진짜임을 증명합니다. 양쪽이 서로를 확인합니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-2">
+  <div class="ch-head"><span class="ch-num">2.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li>예전에는 telnet과 rlogin으로 원격 접속했습니다. 비밀번호가 암호화되지 않은 채 망을 지나서, 중간에서 엿보면 그대로 보였습니다.</li>
+    <li>1995년 헬싱키 공과대학 망에서 비밀번호를 엿보는 사건이 일어났고, 그곳의 연구원 Tatu Ylönen이 SSH를 만들었습니다.</li>
+    <li>암호화로 엿보기는 막았지만, 비밀번호 자체는 여전히 추측과 대입에 약했습니다.</li>
+  </ul></div>
+  <div class="callout idea">
+    <span class="say">"그럼 비밀번호를 보내지 말고, 키를 가진 사람만 만들 수 있는 서명으로 증명하자!"</span>
+    그래서 등장한 것이 바로 <b>SSH 공개키 인증</b>입니다.
+    <ul>
+      <li>1995년 첫 SSH부터 공개키 방식이 있었습니다.</li>
+      <li>2006년 RFC 4252가 SSH 2판의 인증 방식으로 publickey를 표준으로 정했습니다.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="ch" id="s2-3">
+  <div class="ch-head"><span class="ch-num">2.3</span><h2>구조</h2></div>
+  <h3>1. 구성 요소</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>구성</th><th>하는 일</th><th>예시</th></tr></thead>
+    <tbody>
+      <tr><td>개인키</td><td>사용자 PC에만 두는 비밀. 서명을 만듭니다</td><td><code>~/.ssh/id_ed25519</code></td></tr>
+      <tr><td>공개키</td><td>서버에 넣어 두는 짝. 서명을 확인합니다</td><td><code>ssh-ed25519 AAAA… ops@laptop</code></td></tr>
+      <tr><td>authorized_keys</td><td>그 계정으로 들어와도 되는 공개키 목록</td><td>계정마다 파일 1개</td></tr>
+      <tr><td>호스트 키</td><td>서버의 신원을 증명하는 서버 쪽 키</td><td><code>/etc/ssh/ssh_host_ed25519_key</code></td></tr>
+      <tr><td>known_hosts</td><td>사용자가 믿기로 한 서버 호스트 키 목록</td><td><code>~/.ssh/known_hosts</code></td></tr>
+      <tr><td>ssh-agent</td><td>개인키를 메모리에 두고 서명만 대신 해 주는 프로그램</td><td>로그인 동안 실행</td></tr>
+    </tbody>
+  </table></div>
+  <h3>2. 키 알고리즘</h3>
+  <div class="prose"><ul>
+    <li><b>RSA:</b> 가장 오래된 방식입니다. 요즘은 3072비트 이상을 권합니다.</li>
+    <li><b>ECDSA:</b> 타원 곡선 방식으로, RSA보다 키가 짧습니다.</li>
+    <li><b>Ed25519:</b> 키가 짧고 빠르며, 지금 가장 많이 권하는 방식입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-4">
+  <div class="ch-head"><span class="ch-num">2.4</span><h2>작동 방식</h2></div>
+  <div class="prose"><ol>
+    <li><b>키 교환:</b> 먼저 양쪽이 암호화된 통로를 만듭니다. OpenSSH 10.0부터는 양자 컴퓨터에도 버티는 방식이 기본입니다.</li>
+    <li><b>서버 확인:</b> 서버가 <button class="t" data-t="hostkey">호스트 키</button>로 서명한 값을 보내고, 사용자 PC는 <code>known_hosts</code>의 키와 비교합니다.</li>
+    <li><b>공개키 제시:</b> 사용자가 "이 공개키로 들어가겠다"고 알립니다.</li>
+    <li><b>서명:</b> 사용자 PC가 이번 연결에만 쓰이는 값에 개인키로 서명해 보냅니다.</li>
+    <li><b>검증:</b> 서버가 <code>authorized_keys</code>에 있는 공개키로 서명을 확인하고, 맞으면 로그인시킵니다.</li>
+  </ol></div>
+  <details>
+    <summary>Q. "호스트 키가 바뀌었다"는 경고는 왜 무시하면 안 되나요?</summary>
+    <div class="prose"><p>서버를 다시 설치한 게 아니라면, 누군가 중간에서 서버인 척하고 있을 수 있습니다. 이것을 중간자 공격이라고 합니다. 확인 없이 <code>known_hosts</code>에서 지우고 다시 접속하면, 가짜 서버에 그대로 로그인하게 됩니다. 그래서 바뀐 호스트 키를 다시 믿는 일은 권한이 높은 사람만 하게 막는 경우가 많습니다.</p></div>
+  </details>
+</section>
+
+<section class="ch" id="s2-5">
+  <div class="ch-head"><span class="ch-num">2.5</span><h2>이점</h2></div>
+  <div class="prose"><ul>
+    <li><b>대입 공격이 통하지 않습니다:</b> Ed25519 키는 256비트입니다. 비밀번호처럼 하나씩 넣어 보는 방식으로는 맞힐 수 없습니다.</li>
+    <li><b>비밀이 망을 지나지 않습니다:</b> 서버가 해킹당해도 서버에는 공개키만 있습니다.</li>
+    <li><b>자동화가 쉽습니다:</b> 서비스나 스크립트가 사람 없이 장비에 접속할 수 있습니다.</li>
+    <li><b>사람마다 따로 구분합니다:</b> 공유 비밀번호 대신 사람마다 키를 넣으면, 한 사람의 키만 빼서 접근을 끊을 수 있습니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-6">
+  <div class="ch-head"><span class="ch-num">2.6</span><h2>부재 시 문제</h2></div>
+  <p>비밀번호만 쓴다고 가정해 보면 이런 일이 생깁니다.</p>
+  <div class="prose"><ul>
+    <li>22번을 연 서버는 바로 비밀번호 대입 공격을 받습니다.</li>
+    <li>서비스가 장비에 접속하려면 비밀번호를 설정 파일에 그대로 적어 둬야 합니다.</li>
+    <li>여러 사람이 같은 비밀번호를 쓰면, 누가 접속했는지 구분할 수 없습니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-7">
+  <div class="ch-head"><span class="ch-num">2.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>키가 퍼집니다:</b> 공개키가 서버 여기저기의 <code>authorized_keys</code>에 쌓입니다. 누구의 키가 어디에 있는지 모르면 회수할 수 없습니다.</li>
+    <li><b>만료가 없습니다:</b> 한 번 넣은 키는 지울 때까지 계속 유효합니다.</li>
+    <li><b>개인키가 새면 끝입니다:</b> 개인키 파일을 복사당하면 그 사람인 척할 수 있습니다.</li>
+    <li><b>처음 접속의 신뢰:</b> 처음 보는 서버의 호스트 키는 사람이 지문을 보고 믿을지 정합니다. 대부분 확인 없이 yes를 누릅니다.</li>
+  </ul></div>
+  <p>네 가지 모두 2.8에서 대안을 봅니다.</p>
+</section>
+
+<section class="ch" id="s2-8">
+  <div class="ch-head"><span class="ch-num">2.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. SSH 인증서</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 공개키에 인증 기관, 즉 CA가 서명하고 유효 기간을 붙인 것입니다. 서버는 개별 키 대신 "이 CA가 서명한 키"를 믿습니다. OpenSSH 5.4부터 지원합니다.</li>
+    <li><b>해결하는 단점:</b> 키가 퍼짐, 만료가 없음. 호스트 인증서를 쓰면 처음 접속의 신뢰 문제도 줄어듭니다.</li>
+  </ul></div>
+  <h3>2. 하드웨어 보안키 (FIDO2)</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 개인키를 USB 보안키 안에 두고 밖으로 꺼내지 못하게 하는 방식입니다. 서명할 때 키를 손으로 눌러야 합니다. OpenSSH 8.2부터 <code>ed25519-sk</code> 형식으로 지원합니다.</li>
+    <li><b>해결하는 단점:</b> 개인키가 새면 끝. 파일로 복사할 개인키가 없습니다.</li>
+  </ul></div>
+  <h3>3. 중앙 키 관리와 접근 프록시</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 키를 서버마다 넣지 않고, 1.8의 접근 프록시가 로그인할 때마다 짧은 인증서를 발급하는 방식입니다.</li>
+    <li><b>해결하는 단점:</b> 키가 퍼짐.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-9">
+  <div class="ch-head"><span class="ch-num">2.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>구분</th><th>비밀번호</th><th>공개키</th><th><button class="t" data-t="sshcert">SSH 인증서</button></th><th>FIDO2 보안키</th></tr></thead>
+    <tbody>
+      <tr><td>대입 공격</td><td>약함</td><td>강함</td><td>강함</td><td>강함</td></tr>
+      <tr><td>유출 시</td><td>바로 악용</td><td>바로 악용</td><td>만료까지만</td><td>보안키를 손에 넣어야 함</td></tr>
+      <tr><td>회수</td><td>서버마다 변경</td><td>서버마다 삭제</td><td>만료되거나 CA에서 폐기</td><td>서버마다 삭제</td></tr>
+      <tr><td>자동화</td><td>비밀번호 저장 필요</td><td>쉬움</td><td>쉬움 (발급 체계 필요)</td><td>어려움 (손으로 눌러야 함)</td></tr>
+      <tr><td>준비</td><td>없음</td><td>키 배포</td><td>CA 운영</td><td>보안키 구매와 배포</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="ch" id="s2-10">
+  <div class="ch-head"><span class="ch-num">2.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. 양자 내성 키 교환이 기본으로 (2022년부터 2025년)</h3>
+  <div class="prose"><ul>
+    <li>OpenSSH는 2022년 4월 9.0부터 양자 컴퓨터에도 버티는 키 교환을 기본으로 썼습니다.</li>
+    <li>2025년 4월 9일 나온 OpenSSH 10.0은 기본을 <code>mlkem768x25519-sha256</code>로 바꿨습니다. 표준 ML-KEM과 기존 X25519를 함께 쓰는 혼합 방식입니다.</li>
+    <li>이어서 OpenSSH 10.1은 서버가 양자 내성 키 교환을 지원하지 않으면 경고를 띄웁니다. 오래된 장비의 SSH 서버에 붙을 때 이 경고를 보게 됩니다.</li>
+  </ul></div>
+  <h3>2. 오래 남는 키에서 짧은 인증서로 (2024년부터 2025년)</h3>
+  <div class="prose"><ul>
+    <li>1.10에서 본 접근 프록시 흐름과 같은 방향입니다. 서버에 공개키를 두지 않고, 로그인할 때마다 몇 시간짜리 인증서를 받는 방식이 늘고 있습니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>공개키 인증의 약점은 암호가 아니라 관리입니다.</b> 어느 서버에 누구의 키가 있는지 모르면 회수할 수 없습니다.</div>
+</section>
+
+<!-- ============ PART 3 : ACL 기본 거부 ============ -->
+<div class="part" id="p3">
+  <div class="pk">PART 3</div>
+  <h2>ACL 기본 거부 (Default Deny)</h2>
+  <p>여기까지가 들어오는 사람을 확인하는 방법이었습니다. 이제 망 위에서 "허용하지 않은 길은 모두 막는" 원칙, 기본 거부로 넘어가겠습니다.</p>
+  <p>ACL 자체의 구조와 작동 방식은 개인 정리본 9회차(접근 제어와 외부 연결) 1장에 있습니다. 여기서는 "기본값을 거부로 둔다"는 원칙만 봅니다.</p>
+</div>
+
+<section class="ch" id="s3-1">
+  <div class="ch-head"><span class="ch-num">3.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="defaultdeny">기본 거부</button>는 <b>명시적으로 허용한 통신만 통과시키고, 나머지는 모두 막는 원칙</b>입니다.</p>
+  <div class="prose"><ul>
+    <li>허용 목록, 즉 allowlist 방식입니다. 반대는 다 열어 두고 위험한 것만 막는 기본 허용 방식입니다.</li>
+    <li><button class="t" data-t="acl">ACL</button>에서는 맨 끝에 보이지 않는 "모두 거부" 규칙으로 구현됩니다. 이것을 암묵적 거부라고 부릅니다.</li>
+    <li>방화벽, 클라우드 보안 그룹, Kubernetes의 NetworkPolicy도 같은 원칙으로 씁니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-2">
+  <div class="ch-head"><span class="ch-num">3.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li>초기 패킷 필터는 위험하다고 알려진 포트만 골라 막는 방식이 많았습니다.</li>
+    <li>새 서비스가 생기거나 새 공격이 나올 때마다 막을 목록을 뒤쫓아 늘려야 했습니다. 목록에 없는 것은 모두 열려 있었습니다.</li>
+  </ul></div>
+  <div class="callout idea">
+    <span class="say">"그럼 다 막아 두고, 필요한 것만 하나씩 열자!"</span>
+    그래서 등장한 것이 바로 <b>기본 거부</b>입니다.
+    <ul>
+      <li>1975년 Saltzer와 Schroeder가 정리한 보안 설계 원칙 중 "실패해도 안전한 기본값"이 출발점입니다. 접근은 허용할 근거가 있을 때만 준다는 뜻입니다.</li>
+      <li>라우터 ACL의 암묵적 거부가 이 원칙을 망에 옮긴 것입니다.</li>
+      <li>2020년 NIST SP 800-207의 제로 트러스트는 이 원칙을 망 위치에서 사람과 기기 단위까지 넓혔습니다.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="ch" id="s3-3">
+  <div class="ch-head"><span class="ch-num">3.3</span><h2>구조</h2></div>
+  <h3>1. 기본 거부 규칙 목록의 모양</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>순번</th><th>출발지</th><th>목적지</th><th>포트</th><th>동작</th></tr></thead>
+    <tbody>
+      <tr><td class="num">10</td><td>운영자 대역</td><td>점프 서버</td><td>TCP 22</td><td>허용</td></tr>
+      <tr><td class="num">20</td><td>점프 서버</td><td>관리망</td><td>TCP 22, 443</td><td>허용</td></tr>
+      <tr><td class="num">30</td><td>관리망</td><td>NTP, 로그 서버</td><td>UDP 123, 514</td><td>허용</td></tr>
+      <tr><td>끝 (보이지 않음)</td><td>모든 곳</td><td>모든 곳</td><td>모든 포트</td><td>거부</td></tr>
+    </tbody>
+  </table></div>
+  <p>표의 값은 예시입니다. 허용 규칙만 위에 쌓고, 나머지는 마지막 줄이 막습니다.</p>
+  <h3>2. 기본 거부와 기본 허용</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>구분</th><th>기본 거부 (allowlist)</th><th>기본 허용 (denylist)</th></tr></thead>
+    <tbody>
+      <tr><td>규칙 목록의 뜻</td><td>열어 둔 길의 목록</td><td>막아 둔 길의 목록</td></tr>
+      <tr><td>모르는 통신</td><td>막힘</td><td>통과</td></tr>
+      <tr><td>규칙을 빠뜨리면</td><td>필요한 통신이 안 됨</td><td>위험한 통신이 열림</td></tr>
+      <tr><td>잘 맞는 곳</td><td>관리망, 망 사이 경계</td><td>일반 사용자 인터넷</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="ch" id="s3-4">
+  <div class="ch-head"><span class="ch-num">3.4</span><h2>작동 방식</h2></div>
+  <div class="prose"><ol>
+    <li><b>패킷 도착:</b> 포트나 VLAN 인터페이스에 패킷이 들어옵니다.</li>
+    <li><b>허용 규칙 비교:</b> 순번이 작은 규칙부터 조건을 맞춰 봅니다.</li>
+    <li><b>맞으면 통과:</b> 조건이 맞는 첫 허용 규칙에서 통과시킵니다.</li>
+    <li><b>아무것도 안 맞으면 거부:</b> 마지막의 보이지 않는 거부 규칙에 걸려 버려집니다.</li>
+    <li><b>거부 기록:</b> 거부 로그를 켜 두면, 무엇이 막혔는지 보고 빠진 허용 규칙을 찾을 수 있습니다.</li>
+  </ol></div>
+</section>
+
+<section class="ch" id="s3-5">
+  <div class="ch-head"><span class="ch-num">3.5</span><h2>이점</h2></div>
+  <div class="prose"><ul>
+    <li><b>모르는 것은 막힙니다:</b> 누가 서버에 새 서비스를 띄워도, 허용 규칙이 없으면 밖에서 닿지 않습니다.</li>
+    <li><b>열린 길이 곧 규칙 목록입니다:</b> "어느 망끼리 통신되나"라는 질문에 규칙 목록만 보면 답할 수 있습니다.</li>
+    <li><b>횡적 이동을 막습니다:</b> 서버 하나가 뚫려도 허용하지 않은 옆 망으로는 못 넘어갑니다.</li>
+    <li><b>실수가 안전한 쪽으로 납니다:</b> 규칙을 빠뜨리면 "안 된다"는 문의로 바로 드러납니다. 기본 허용에서 빠뜨린 규칙은 아무도 모르게 열려 있습니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-6">
+  <div class="ch-head"><span class="ch-num">3.6</span><h2>부재 시 문제</h2></div>
+  <p>기본 허용으로 운영한다고 가정해 보면 이런 일이 생깁니다.</p>
+  <div class="prose"><ul>
+    <li>누군가 테스트로 연 포트가 그대로 남습니다.</li>
+    <li>서비스망에서 관리망의 <button class="t" data-t="bmc">BMC</button> 화면에 닿을 수 있습니다. BMC는 전원까지 끌 수 있습니다.</li>
+    <li>막아야 할 목록은 끝이 없어서, 늘 한발 늦게 따라갑니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-7">
+  <div class="ch-head"><span class="ch-num">3.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>처음 구성이 어렵습니다:</b> 필요한 통신을 모두 알아야 합니다. DNS, NTP, 로그 전송처럼 눈에 안 띄는 통신을 빠뜨리기 쉽습니다.</li>
+    <li><b>장애 원인이 헷갈립니다:</b> 접속이 안 될 때 장비가 죽은 건지, 허용 규칙이 없는 건지 바로 구분되지 않습니다.</li>
+    <li><b>규칙 수가 늘어납니다:</b> 허용할 쌍마다 규칙이 필요해서 스위치의 규칙 상한에 닿을 수 있습니다.</li>
+    <li><b>넓은 허용 하나로 무너집니다:</b> "모든 곳에서 모든 곳으로 허용" 같은 규칙 하나가 위쪽에 들어가면 기본 거부가 사실상 꺼집니다.</li>
+  </ul></div>
+  <p>3.8에서 대안을 봅니다.</p>
+</section>
+
+<section class="ch" id="s3-8">
+  <div class="ch-head"><span class="ch-num">3.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. 관찰 후 규칙 만들기</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 일정 기간 실제 통신을 기록만 하고, 그 기록으로 허용 규칙 초안을 만드는 방식입니다. 마이크로 세그멘테이션 제품들이 이 방식을 씁니다.</li>
+    <li><b>해결하는 단점:</b> 처음 구성이 어려움.</li>
+  </ul></div>
+  <h3>2. 그룹과 의도 단위 정책</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> IP 대신 "관리망", "점프 서버" 같은 그룹 이름으로 규칙을 쓰고, 컨트롤러가 장비별 ACL로 바꿔 넣는 방식입니다. 개인 정리본 9회차 1.8에서 봤습니다.</li>
+    <li><b>해결하는 단점:</b> 규칙 수가 늘어남.</li>
+  </ul></div>
+  <h3>3. 반영 전 검증</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 규칙을 장비에 넣기 전에 "이 규칙이 들어가면 어디서 어디로 통신이 되는가"를 계산해 보는 방식입니다. 오픈소스 Batfish 같은 망 설정 분석 도구가 있습니다.</li>
+    <li><b>해결하는 단점:</b> 넓은 허용 하나로 무너짐, 장애 원인이 헷갈림.</li>
+  </ul></div>
+  <h3>4. 제로 트러스트</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 망 안에 있다는 이유만으로 믿지 않고, 요청마다 사람과 기기를 확인하는 방식입니다.</li>
+    <li><b>해결하는 단점:</b> 허용된 망 안에서는 다 통하는 문제.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-9">
+  <div class="ch-head"><span class="ch-num">3.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>구분</th><th>기본 허용과 거부 목록</th><th>기본 거부 ACL</th><th>그룹, 의도 단위 정책</th><th><button class="t" data-t="zerotrust">제로 트러스트</button></th></tr></thead>
+    <tbody>
+      <tr><td>판단 기준</td><td>IP, 포트</td><td>IP, 포트</td><td>그룹 이름</td><td>사람, 기기, 요청</td></tr>
+      <tr><td>모르는 통신</td><td>통과</td><td>막힘</td><td>막힘</td><td>막힘</td></tr>
+      <tr><td>관리 부담</td><td>낮음 (대신 위험)</td><td>규칙 수만큼</td><td>컨트롤러 운영</td><td>ID 체계 전체</td></tr>
+      <tr><td>집행 위치</td><td>방화벽, 스위치</td><td>스위치, 방화벽</td><td>스위치 (자동 생성)</td><td>프록시, 에이전트</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="ch" id="s3-10">
+  <div class="ch-head"><span class="ch-num">3.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. 국내 제로 트러스트 가이드라인 2.0 (2024년 12월)</h3>
+  <div class="prose"><ul>
+    <li>과학기술정보통신부와 KISA가 2024년 12월 3일 제로트러스트 가이드라인 2.0을 냈습니다.</li>
+    <li>1.0이 개념 소개였다면, 2.0은 단계별 성숙도 모델과 도입 절차를 구체적으로 담았습니다. 이후 KISA는 이를 바탕으로 OT, 즉 산업 제어 환경용 안내서도 냈습니다.</li>
+    <li>기본 거부가 망 경계에서 끝나지 않고, 사람과 기기 단위로 내려가는 흐름입니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>기본 거부에서 "안 된다"는 정상 동작일 수 있습니다.</b> 장비를 의심하기 전에 허용 규칙이 있는지부터 봅니다.</div>
+</section>
+
+<!-- ============ PART 4 : 폐쇄망과 관리망 ============ -->
+<div class="part" id="p4">
+  <div class="pk">PART 4</div>
+  <h2>폐쇄망과 관리망 (Closed Network &amp; Management Network)</h2>
+  <p>여기까지가 길을 열고 닫는 원칙이었습니다. 이제 그 길이 깔리는 곳, 폐쇄망과 관리망으로 넘어가겠습니다.</p>
+</div>
+
+<section class="ch" id="s4-1">
+  <div class="ch-head"><span class="ch-num">4.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="airgap">폐쇄망</button>은 <b>인터넷과 연결이 끊긴 망</b>입니다. 관리망은 <b>장비를 관리하는 통신만 따로 흐르는 망</b>입니다.</p>
+  <div class="prose"><ul>
+    <li>폐쇄망을 물리적으로 완전히 끊은 것을 에어갭, air gap이라고 합니다. 바깥에서 파일을 들일 때는 승인된 매체와 절차만 씁니다.</li>
+    <li>관리망에는 BMC, 스위치의 관리 포트, 서버의 SSH 접속이 흐릅니다. 서비스 트래픽과 길을 나눠서, 서비스망이 멈춰도 관리망으로 들어갈 수 있게 합니다. 이것을 아웃오브밴드, <button class="t" data-t="oob">OOB 관리</button>라고 합니다.</li>
+    <li>둘은 함께 쓰이는 경우가 많습니다. 폐쇄망 데이터센터 안에서 관리망을 또 나눕니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s4-2">
+  <div class="ch-head"><span class="ch-num">4.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li>국가 기관, 금융, 방산처럼 유출 피해가 큰 곳에서는 인터넷에 붙어 있는 것 자체가 위험이었습니다. 한국 공공기관은 2000년대 중반부터 업무망과 인터넷망을 나누는 망분리를 해 왔습니다.</li>
+    <li>관리 통신을 서비스망으로 보내면, 서비스망이 막혔을 때 고칠 길도 함께 막혔습니다. 서비스 사용자가 관리 포트에 닿는 문제도 있었습니다.</li>
+  </ul></div>
+  <div class="callout idea">
+    <span class="say">"그럼 바깥과는 끊고, 관리하는 길도 따로 깔자!"</span>
+    그래서 등장한 것이 바로 <b>폐쇄망과 관리망</b>입니다.
+    <ul>
+      <li>1998년 <button class="t" data-t="ipmi">IPMI</button> 1.0이 서버의 BMC를 별도 관리 포트로 다루는 표준을 내놓으면서, 관리망을 따로 까는 구성이 일반화됐습니다.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="ch" id="s4-3">
+  <div class="ch-head"><span class="ch-num">4.3</span><h2>구조</h2></div>
+  <h3>1. 데이터센터 안의 망</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>망</th><th>흐르는 것</th><th>닿는 사람과 장비</th></tr></thead>
+    <tbody>
+      <tr><td>업무망</td><td>운영자 PC의 일반 업무</td><td>운영자</td></tr>
+      <tr><td>관리망</td><td>BMC, 스위치 관리, SSH, 모니터링 수집</td><td>점프 서버, 관리 서비스</td></tr>
+      <tr><td>서비스망</td><td>학습, 추론, 사용자 서비스 트래픽</td><td>사용자, 애플리케이션</td></tr>
+      <tr><td>스토리지망</td><td>데이터 읽기와 쓰기</td><td>서버, 스토리지</td></tr>
+    </tbody>
+  </table></div>
+  <h3>2. 폐쇄망의 반입 구조</h3>
+  <div class="prose"><ul>
+    <li><b>망연계 장비:</b> 망 사이로 파일을 검사한 뒤 넘겨 주는 장비입니다.</li>
+    <li><b>일방향 전송 장비:</b> 데이터 다이오드라고도 부릅니다. 한쪽 방향으로만 데이터가 흐르게 물리적으로 막습니다.</li>
+    <li><b>내부 미러 저장소:</b> OS 패키지, 컨테이너 이미지를 안쪽에 복제해 두는 저장소입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s4-4">
+  <div class="ch-head"><span class="ch-num">4.4</span><h2>작동 방식</h2></div>
+  <p>폐쇄망 안의 관리망에서 운영자가 장비 하나를 손보는 흐름입니다.</p>
+  <div class="prose"><ol>
+    <li><b>업무망에서 시작:</b> 운영자가 업무망 PC에서 접속을 시작합니다.</li>
+    <li><b>경계 통과:</b> 업무망과 관리망 사이의 <button class="t" data-t="jumpserver">점프 서버</button>를 거칩니다. PART 1입니다.</li>
+    <li><b>ACL 확인:</b> 점프 서버에서 관리망 장비로 가는 길이 허용 규칙에 있는지 스위치가 봅니다. PART 3입니다.</li>
+    <li><b>장비 작업:</b> BMC나 스위치 관리 포트에 접속해 작업합니다.</li>
+    <li><b>파일이 필요하면:</b> 펌웨어나 패치 파일은 반입 절차로 내부 저장소에 먼저 들인 뒤 씁니다.</li>
+  </ol></div>
+</section>
+
+<section class="ch" id="s4-5">
+  <div class="ch-head"><span class="ch-num">4.5</span><h2>이점</h2></div>
+  <div class="prose"><ul>
+    <li><b>바깥 공격 경로가 사라집니다:</b> 인터넷에서 직접 닿는 길이 없습니다.</li>
+    <li><b>관리 권한이 나뉩니다:</b> 서비스망 사용자는 BMC나 스위치 관리 포트에 닿지 못합니다.</li>
+    <li><b>장애 중에도 들어갈 수 있습니다:</b> 서비스망이 막혀도 관리망으로 서버를 재시작하거나 콘솔을 볼 수 있습니다.</li>
+    <li><b>서로 방해하지 않습니다:</b> 대용량 학습 트래픽이 몰려도 관리 접속이 느려지지 않습니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s4-6">
+  <div class="ch-head"><span class="ch-num">4.6</span><h2>부재 시 문제</h2></div>
+  <p>관리망을 따로 두지 않는다고 가정해 보면 이런 일이 생깁니다.</p>
+  <div class="prose"><ul>
+    <li>서비스망이 붐비면 장비 관리 접속도 함께 느려지거나 끊깁니다.</li>
+    <li>GPU 서버를 쓰는 사용자가 <button class="t" data-t="bmc">BMC</button> 화면에 닿을 수 있습니다.</li>
+    <li>폐쇄망 구성이 요건인 공공, 금융 고객에게는 제품을 넣을 수 없습니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s4-7">
+  <div class="ch-head"><span class="ch-num">4.7</span><h2>단점</h2></div>
+  <div class="prose"><ul>
+    <li><b>업데이트가 느립니다:</b> 패치 하나에도 반입 절차를 거쳐야 합니다.</li>
+    <li><b>바깥 서비스를 못 씁니다:</b> 클라우드 모니터링, 온라인 라이선스 인증, SaaS 도구가 동작하지 않습니다.</li>
+    <li><b>완벽하지 않습니다:</b> 2010년 알려진 Stuxnet은 USB로 에어갭 시설에 들어갔습니다.</li>
+    <li><b>관리망이 가장 귀한 표적이 됩니다:</b> 관리망에는 가장 강한 권한이 모입니다. 관리망 안에서도 기본 거부와 점프 서버가 필요한 이유입니다.</li>
+    <li><b>비용이 듭니다:</b> 망마다 스위치와 케이블을 따로 깔아야 합니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s4-8">
+  <div class="ch-head"><span class="ch-num">4.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. 망연계와 일방향 전송</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 망 사이에 검사와 한 방향 전송을 거쳐 파일을 넘기는 장치입니다.</li>
+    <li><b>해결하는 단점:</b> 업데이트가 느림.</li>
+  </ul></div>
+  <h3>2. 내부 미러 저장소와 오프라인 설치 묶음</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 필요한 패키지와 이미지를 미리 묶어 안쪽에 두고, 바깥 연결 없이 설치하는 방식입니다.</li>
+    <li><b>해결하는 단점:</b> 바깥 서비스를 못 씀, 업데이트가 느림.</li>
+  </ul></div>
+  <h3>3. 데이터 등급별 차등 보안</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 망 전체를 끊는 대신, 데이터의 중요도에 따라 통제 수준을 달리하는 방식입니다. 한국의 국가망보안체계, <button class="t" data-t="n2sf">N²SF</button>가 이쪽입니다.</li>
+    <li><b>해결하는 단점:</b> 바깥 서비스를 못 씀.</li>
+  </ul></div>
+  <h3>4. 에어갭 클라우드</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 클라우드 회사의 소프트웨어와 운영 방식을 인터넷에서 끊긴 고객 전산실 안에 그대로 설치하는 제품입니다. Google Distributed Cloud air-gapped가 예입니다.</li>
+    <li><b>해결하는 단점:</b> 바깥 서비스를 못 씀.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s4-9">
+  <div class="ch-head"><span class="ch-num">4.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>구분</th><th>완전 에어갭</th><th>논리적 망분리</th><th>데이터 등급별 (N²SF)</th><th>에어갭 클라우드</th></tr></thead>
+    <tbody>
+      <tr><td>나누는 방법</td><td>물리적 단절</td><td>VLAN, 방화벽, ACL</td><td>등급별 통제</td><td>물리적 단절 안의 클라우드</td></tr>
+      <tr><td>바깥 서비스</td><td>불가</td><td>규칙으로 허용한 것만</td><td>공개 등급은 허용</td><td>제품 안에 포함된 것만</td></tr>
+      <tr><td>업데이트</td><td>반입 절차</td><td>규칙에 따라 직접</td><td>등급에 따라</td><td>업체가 반입해 제공</td></tr>
+      <tr><td>잘 맞는 곳</td><td>국방, 기밀</td><td>일반 기업 데이터센터</td><td>국내 공공기관</td><td>정부, 규제 산업</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="ch" id="s4-10">
+  <div class="ch-head"><span class="ch-num">4.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. 망분리에서 국가망보안체계로 (2025년)</h3>
+  <div class="prose"><ul>
+    <li>국가정보원은 2025년 1월 국가망보안체계, N²SF 가이드라인 초안을 공개했고, 2025년 9월 가이드라인 1.0을 냈습니다.</li>
+    <li>업무 정보와 시스템을 기밀, 민감, 공개 세 등급으로 나누고, 등급에 따라 통제를 달리합니다. 망을 통째로 끊던 방식에서 데이터 중요도에 맞추는 방식으로 바뀌는 흐름입니다. 18년 만의 큰 개편이라는 평가가 나옵니다.</li>
+  </ul></div>
+  <h3>2. 폐쇄망 안으로 들어오는 AI (2025년)</h3>
+  <div class="prose"><ul>
+    <li>Google은 2025년 8월 Gemini를 Google Distributed Cloud air-gapped에서 정식 제공한다고 밝혔습니다.</li>
+    <li>폐쇄망이라서 최신 AI를 못 쓴다는 전제가 바뀌고 있습니다. 그만큼 폐쇄망 안에 GPU 인프라를 들이고 관리하는 수요도 커집니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span>폐쇄망은 바깥 공격을 줄이는 대신, <b>안에서 쓰는 모든 도구가 바깥 연결 없이 동작해야 한다는 조건</b>을 겁니다.</div>
+</section>
+
+<!-- ============ PART 5 : 단일 장애점 ============ -->
+<div class="part" id="p5">
+  <div class="pk">PART 5</div>
+  <h2>단일 장애점 (Single Point of Failure, SPOF)</h2>
+  <p>여기까지가 길이 깔리는 곳이었습니다. 이제 그 길이 하나뿐일 때 생기는 위험, 단일 장애점으로 넘어가겠습니다.</p>
+</div>
+
+<section class="ch" id="s5-1">
+  <div class="ch-head"><span class="ch-num">5.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="spof">단일 장애점</button>은 <b>그 하나가 멈추면 시스템 전체가 멈추는 구성 요소</b>입니다.</p>
+  <div class="prose"><ul>
+    <li>장비, 링크, 소프트웨어 하나일 수도 있고, 사람이나 설정 하나일 수도 있습니다.</li>
+    <li>찾는 질문은 간단합니다. "이게 지금 꺼지면 무엇이 안 되나?"</li>
+    <li>관리망 단일 장애점은 장비를 관리하러 가는 길이 하나뿐인 지점입니다. 점프 서버, 관리 스위치, 관리망 업링크가 흔한 예입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s5-2">
+  <div class="ch-head"><span class="ch-num">5.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><ul>
+    <li>시스템이 커질수록 부품 하나의 고장이 전체 중단으로 번지는 일이 잦아졌습니다.</li>
+    <li>부품을 아무리 좋게 만들어도 고장은 결국 납니다. 고장이 안 나게 하는 것보다, 고장이 나도 버티게 하는 쪽이 현실적이었습니다.</li>
+  </ul></div>
+  <div class="callout idea">
+    <span class="say">"그럼 하나가 멈춰도 다른 하나가 이어받게 하자!"</span>
+    그래서 등장한 것이 바로 <b>단일 장애점을 찾아 없애는 설계, 즉 이중화</b>입니다.
+    <ul>
+      <li>1987년 버클리의 Patterson, Gibson, Katz가 디스크 여러 개로 하나의 고장을 견디는 RAID를 제안했습니다.</li>
+      <li>1998년 RFC 2338의 <button class="t" data-t="vrrp">VRRP</button>가 라우터 두 대가 가상 IP 하나를 나눠 쓰는 방법을 표준으로 정했습니다. 개인 정리본 9회차에서 본 게이트웨이 이중화가 이것입니다.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="ch" id="s5-3">
+  <div class="ch-head"><span class="ch-num">5.3</span><h2>구조</h2></div>
+  <p>관리망에서 단일 장애점이 되기 쉬운 지점입니다.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>지점</th><th>멈추면</th><th>흔한 대책</th></tr></thead>
+    <tbody>
+      <tr><td>점프 서버</td><td>그 뒤 장비 전체에 접속할 수 없음</td><td>2대 이상, 다른 경로</td></tr>
+      <tr><td>점프 서버 겸용 헤드 노드</td><td>재시작하는 동안 뒤쪽 장비와 HPC 사용자 접속이 함께 끊김</td><td>전원 제어 권한 제한, 예비 경로</td></tr>
+      <tr><td>관리 스위치</td><td>그 스위치에 붙은 BMC 전부 안 보임</td><td>스위치 2대, 콘솔 서버</td></tr>
+      <tr><td>관리망 업링크</td><td>그 구역 전체 안 보임</td><td>링크 2개 묶기 (LACP)</td></tr>
+      <tr><td>DNS, NTP, 인증 서버</td><td>이름 풀이, 시간 맞춤, 로그인 실패</td><td>서버 이중화</td></tr>
+      <tr><td>사람과 비밀</td><td>키를 가진 사람이 한 명뿐이면 그 사람 없이는 못 들어감</td><td>여러 사람에게 권한, 비상 계정</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="ch" id="s5-4">
+  <div class="ch-head"><span class="ch-num">5.4</span><h2>작동 방식</h2></div>
+  <p>관리망의 단일 장애점 하나가 멈췄을 때 영향이 퍼지는 순서입니다.</p>
+  <div class="prose"><ol>
+    <li><b>지점이 멈춤:</b> 점프 서버가 재시작에 들어갑니다.</li>
+    <li><b>수집이 끊김:</b> 그 뒤 장비들의 상태 수집이 한꺼번에 끊깁니다.</li>
+    <li><b>원인이 가려짐:</b> 관리 화면에는 장비 수백 대가 동시에 "연결 끊김"으로 보입니다. 장비가 죽은 건지, 길이 끊긴 건지 바로 구분되지 않습니다.</li>
+    <li><b>복구 길도 막힘:</b> 장비를 고칠 수단도 같은 길을 쓰면, 길이 살아날 때까지 아무것도 못 합니다.</li>
+    <li><b>한꺼번에 몰림:</b> 길이 살아나면 밀린 수집과 알림이 한꺼번에 몰립니다.</li>
+  </ol></div>
+</section>
+
+<section class="ch" id="s5-5">
+  <div class="ch-head"><span class="ch-num">5.5</span><h2>이점</h2></div>
+  <p>단일 장애점을 미리 찾아 두면 이런 것을 얻습니다.</p>
+  <div class="prose"><ul>
+    <li><b>장애 범위를 예측합니다:</b> "이 서버를 재시작하면 장비 몇 대가 안 보인다"를 작업 전에 압니다.</li>
+    <li><b>알림을 묶습니다:</b> 장비 수백 대의 알림 대신 "경로 끊김" 하나로 보여 줄 수 있습니다.</li>
+    <li><b>투자 순서를 정합니다:</b> 어디부터 이중화할지 정할 근거가 됩니다.</li>
+  </ul></div>
+  <p>일부러 하나로 모으는 이점도 있습니다. 점프 서버처럼 입구를 하나로 두면 지키기 쉽고 구성이 단순합니다. 보안과 가용성 사이에서 고른 결과입니다.</p>
+</section>
+
+<section class="ch" id="s5-6">
+  <div class="ch-head"><span class="ch-num">5.6</span><h2>부재 시 문제</h2></div>
+  <p>단일 장애점이 어디인지 모른다고 가정해 보면 이런 일이 생깁니다.</p>
+  <div class="prose"><ul>
+    <li>점프 서버 겸용 서버를 평소처럼 재시작했다가, 그 뒤 장비 전체가 안 보이게 됩니다.</li>
+    <li>알림 수백 건이 쏟아지고, 운영자는 장비 하나하나를 의심하며 시간을 씁니다.</li>
+    <li>원격으로 복구할 길이 없어서 사람이 전산실로 가야 합니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s5-7">
+  <div class="ch-head"><span class="ch-num">5.7</span><h2>단점</h2></div>
+  <p>이중화로 단일 장애점을 없애는 일에도 단점이 있습니다.</p>
+  <div class="prose"><ul>
+    <li><b>비용이 듭니다:</b> 장비와 링크가 두 배로 듭니다.</li>
+    <li><b>이중화 장치가 새 장애 원인이 됩니다:</b> 자동 전환 장치나 자동화 자체가 고장 날 수 있습니다.</li>
+    <li><b>둘 다 주인이라고 믿는 문제:</b> 연결이 끊긴 두 장비가 서로 자기가 활성이라고 판단하는 것을 <button class="t" data-t="splitbrain">스플릿 브레인</button>이라고 합니다.</li>
+    <li><b>같은 원인으로 함께 멈춥니다:</b> 두 대에 같은 소프트웨어, 같은 설정을 넣으면 같은 결함으로 동시에 멈춥니다.</li>
+  </ul></div>
+  <p>5.10에서 실제 사례를 봅니다.</p>
+</section>
+
+<section class="ch" id="s5-8">
+  <div class="ch-head"><span class="ch-num">5.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. 활성과 대기 이중화 (VRRP, keepalived)</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 두 대 중 한 대만 일하고, 멈추면 다른 한 대가 가상 IP를 넘겨받습니다.</li>
+    <li><b>해결하는 단점:</b> 장비 한 대의 고장.</li>
+  </ul></div>
+  <h3>2. 종류가 다른 예비 경로</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 같은 장비를 하나 더 두는 대신 다른 종류의 길을 둡니다. 시리얼 콘솔 서버, LTE 같은 별도 회선이 예입니다.</li>
+    <li><b>해결하는 단점:</b> 같은 원인으로 함께 멈춤.</li>
+  </ul></div>
+  <h3>3. 단계적 배포</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 업데이트나 설정 변경을 한꺼번에 넣지 않고, 일부에 먼저 넣고 지켜본 뒤 넓히는 방식입니다.</li>
+    <li><b>해결하는 단점:</b> 같은 원인으로 함께 멈춤.</li>
+  </ul></div>
+  <h3>4. 의존 관계 지도</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 어떤 장비가 어떤 경로와 서비스에 기대는지 기록해 두고, 작업 전에 영향 범위를 계산하는 방식입니다.</li>
+    <li><b>해결하는 단점:</b> 숨어 있는 단일 장애점.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s5-9">
+  <div class="ch-head"><span class="ch-num">5.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>구분</th><th>단일 구성</th><th>활성과 대기</th><th>활성과 활성</th><th>다른 종류의 예비 경로</th></tr></thead>
+    <tbody>
+      <tr><td>장비</td><td>1대</td><td>2대 (1대는 대기)</td><td>2대 이상 함께 일함</td><td>주 경로와 다른 수단</td></tr>
+      <tr><td>멈췄을 때</td><td>전체 중단</td><td>수 초 안에 넘겨받음</td><td>남은 쪽이 계속 처리</td><td>느리지만 들어갈 수 있음</td></tr>
+      <tr><td>같은 결함</td><td>해당 없음</td><td>함께 멈출 수 있음</td><td>함께 멈출 수 있음</td><td>피할 수 있음</td></tr>
+      <tr><td>예</td><td>점프 서버 1대</td><td>VRRP 게이트웨이</td><td>로드 밸런서 뒤 서버들</td><td>콘솔 서버, LTE 회선</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="ch" id="s5-10">
+  <div class="ch-head"><span class="ch-num">5.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. 클라우드도 한 지점에서 무너진다 (2025년 10월)</h3>
+  <div class="prose"><ul>
+    <li>2025년 10월 19일 밤부터 20일 오후까지 AWS us-east-1 리전에 큰 장애가 있었습니다.</li>
+    <li>AWS의 사후 보고서에 따르면 원인은 DynamoDB의 DNS 관리 자동화에 숨어 있던 경쟁 상태였습니다. 이 결함이 지역 엔드포인트의 DNS 기록을 비워 버렸고, 자동화가 이를 고치지 못했습니다. 이중화를 위한 자동화가 단일 장애점이 된 사례입니다.</li>
+  </ul></div>
+  <h3>2. 같은 업데이트가 모든 곳에 (2024년 7월)</h3>
+  <div class="prose"><ul>
+    <li>2024년 7월 19일 CrowdStrike Falcon 센서의 잘못된 설정 파일 하나가 윈도 기기에 한꺼번에 배포됐습니다.</li>
+    <li>Microsoft는 약 850만 대가 영향을 받았다고 추정했습니다. 장비가 아무리 많아도 같은 업데이트를 동시에 받으면 하나처럼 멈춘다는 것을 보여 줬습니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span>단일 장애점은 "가장 중요한 하나"가 아니라 <b>"대신할 것이 없는 하나"</b>입니다. 점프 서버는 보안 때문에 일부러 하나로 모은 길이라서, 가용성 대책을 따로 세워야 합니다.</div>
+</section>
+
+<!-- ============ PART 6 : 서브 NAT 포트 포워딩 ============ -->
+<div class="part" id="p6">
+  <div class="pk">PART 6</div>
+  <h2>서브: NAT 포트 포워딩 (Port Forwarding)</h2>
+  <p>여기까지가 필수 키워드였습니다. 서브 키워드인 NAT 포트 포워딩은 한 줄로 짚고 넘어가겠습니다.</p>
+</div>
+
+<section class="ch" id="s6-1">
+  <div class="ch-head"><span class="ch-num">6.1</span><h2>한 줄 정리</h2></div>
+  <p class="lead"><button class="t" data-t="portfwd">포트 포워딩</button>은 <b>게이트웨이의 외부 포트 하나를 내부 장비의 주소와 포트에 짝지어, 바깥 접속을 안으로 넘겨 주는 규칙</b>입니다.</p>
+  <div class="prose"><ul>
+    <li>점프 서버와의 차이는 인증 위치입니다. 점프 서버는 입구에서 사람을 먼저 확인하지만, 포트 포워딩은 문만 열어 주고 인증은 안쪽 장비가 합니다.</li>
+    <li>그래서 포트 포워딩은 "어떤 포트를 누구에게 열었나"를 목록으로 관리하고, 출발지를 제한하는 것이 핵심입니다.</li>
+    <li>자세한 구조와 작동 방식은 개인 정리본 9회차(접근 제어와 외부 연결) 2장에 있습니다.</li>
+  </ul></div>
+</section>
+
+<!-- ============ PART 7 : AstraBase에서는 ============ -->
+<div class="part" id="p7">
+  <div class="pk">PART 7</div>
+  <h2>AstraBase에서는</h2>
+  <p>마지막으로 오늘 본 길들이 AstraBase에 어떻게 들어가 있는지 맞춰 보겠습니다.</p>
+</div>
+
+<section class="ch" id="s7-1">
+  <div class="ch-head"><span class="ch-num">7.1</span><h2>학습 포인트별 연결</h2></div>
+  <p>이 스터디의 <button class="t" data-t="mgmtzone">관리 존</button>은 정책 문서에서 관리 영역이라고 부릅니다. 아래 내용은 ASB-POL-0001 역할·권한 정책과 ASB-POL-0003 용어 정책을 기준으로 정리했습니다.</p>
+  <div class="prose"><ol>
+    <li><b>유일한 입구, 그리고 헤드 노드 겸용:</b> 관리 존마다 장비에 닿는 접속 경로를 직결과 점프 서버 중에서 고릅니다. 관리 대상 서버 하나를 "점프 서버 겸용 서버"로 지정할 수도 있습니다. PART 1의 1.3에서 본 HPC 헤드 노드가 이 경우입니다.</li>
+    <li><b>바깥에서 안으로 들어오는 다른 길:</b> 외부 포트 화면의 포트 포워딩입니다. PART 6입니다.</li>
+    <li><b>막는 일이 어디에서 일어나나:</b> 세 곳입니다. 스위치의 접근 제어 규칙이 망 사이를 막고, 점프 서버의 SSH 인증이 사람과 서비스를 막고, 게이트웨이의 출발지 제한이 바깥을 막습니다.</li>
+    <li><b>길이 끊기면 뒤쪽이 통째로 안 보인다:</b> PART 5의 관리망 단일 장애점입니다.</li>
+  </ol></div>
+</section>
+
+<section class="ch" id="s7-2">
+  <div class="ch-head"><span class="ch-num">7.2</span><h2>정책에 나타난 개념</h2></div>
+  <div class="prose"><ul>
+    <li><b>연결 테스트 4단계:</b> 점프 서버 연결 테스트는 응답, <button class="t" data-t="hostkey">호스트 키</button>, 인증, TCP 포워딩 순서로 확인합니다. PART 1의 1.4 작동 방식 2번부터 4번, PART 2의 호스트 키와 공개키 인증이 그대로 들어 있습니다.</li>
+    <li><b>실패 사유도 같은 4가지:</b> 응답 없음, 호스트 키 변경, 인증 실패, TCP 포워딩 거부입니다. 어느 단계에서 막혔는지 보고 원인을 좁힙니다.</li>
+    <li><b>호스트 키 다시 승인은 Super Admin만:</b> 접속 대상을 믿을지 바꾸는 일이라서입니다. PART 2의 2.4 Q에서 본 중간자 공격 위험 때문입니다.</li>
+    <li><b>접속 경로 설정과 겸용 서버의 전원 제어는 Super Admin만:</b> 점프 서버 겸용 서버를 끄거나 재시작하면 관리 존 전체가 안 보이게 됩니다. BMC 전원 제어 같은 우회 경로로 끄는 것도 같은 권한으로 막습니다. PART 5의 단일 장애점을 권한으로 지키는 셈입니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span>AstraBase에서 점프 서버는 단순한 접속 설정이 아니라 <b>관리 존 전체로 가는 유일한 길</b>입니다. 그래서 그 길을 바꾸거나 끊는 일은 가장 높은 권한에만 열려 있습니다.</div>
+</section>
+
+<section class="ch" id="refs">
+  <div class="ch-head"><span class="ch-num">+</span><h2>참고</h2></div>
+  <div class="prose"><ul>
+    <li><a href="https://en.wikipedia.org/wiki/Bastion_host" target="_blank" rel="noopener">Bastion host (Wikipedia)</a></li>
+    <li><a href="https://www.openssh.com/txt/release-7.3" target="_blank" rel="noopener">OpenSSH 7.3 release notes, ProxyJump (2016)</a></li>
+    <li><a href="https://www.openssh.com/txt/release-10.0" target="_blank" rel="noopener">OpenSSH 10.0 release notes (2025)</a></li>
+    <li><a href="https://www.openssh.org/pq.html" target="_blank" rel="noopener">OpenSSH Post-Quantum Cryptography</a></li>
+    <li><a href="https://www.rfc-editor.org/rfc/rfc4252" target="_blank" rel="noopener">RFC 4252 The Secure Shell (SSH) Authentication Protocol</a></li>
+    <li><a href="https://goteleport.com/use-cases/vpn-bastion-alternative/" target="_blank" rel="noopener">Teleport, VPN and bastion alternative</a></li>
+    <li><a href="https://www.twingate.com/blog/replacing-bastion-hosts" target="_blank" rel="noopener">Twingate, Replacing bastion hosts</a></li>
+    <li><a href="https://csrc.nist.gov/pubs/sp/800/207/final" target="_blank" rel="noopener">NIST SP 800-207 Zero Trust Architecture (2020)</a></li>
+    <li><a href="https://byline.network/2024/12/3-220/" target="_blank" rel="noopener">제로트러스트 가이드라인 2.0 공개 (바이라인네트워크, 2024)</a></li>
+    <li><a href="https://www.ddaily.co.kr/page/view/2025012316455942967" target="_blank" rel="noopener">국가망보안체계 N²SF 가이드라인 초안 공개 (디지털데일리, 2025)</a></li>
+    <li><a href="https://cloud.google.com/blog/products/ai-machine-learning/run-gemini-and-ai-on-prem-with-google-distributed-cloud" target="_blank" rel="noopener">Gemini on Google Distributed Cloud air-gapped GA (Google Cloud, 2025)</a></li>
+    <li><a href="https://aws.amazon.com/message/101925/" target="_blank" rel="noopener">AWS us-east-1 post-event summary (2025)</a></li>
+    <li><a href="https://techcrunch.com/2024/07/20/microsoft-says-8-5m-windows-devices-were-affected-by-crowdstrike-outage/" target="_blank" rel="noopener">Microsoft says 8.5M Windows devices were affected by CrowdStrike outage (TechCrunch, 2024)</a></li>
+  </ul></div>
+</section>
+
+<nav class="pager" id="pager" data-no="N2" aria-label="회차 이동"></nav>
+</main>
+</div>
+
+<footer class="site"><div class="container">자료의 오류나 보충할 내용은 <a href="https://github.com/designerbohyun/domain-study/issues">GitHub 이슈</a>로 알려 주세요.</div></footer>
+<script src="../assets/terms.js"></script>
+<script src="../assets/sessions.js"></script>
+<script src="../assets/site.js"></script>
+</body>
+</html>

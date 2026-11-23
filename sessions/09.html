@@ -12,14 +12,14 @@
 <body data-root="..">
 <header class="site"><nav class="container">
   <ul><li><a class="brand" href="../">도메인 스터디</a></li></ul>
-  <ul><li><a href="../">스터디 목차</a></li><li><a href="../structure.html">구조도</a></li><li><a href="../glossary.html">용어 사전</a></li></ul>
+  <ul><li><a href="../">GPU 스터디</a></li><li><a href="../network.html">네트워크 스터디</a></li><li><a href="../structure.html">구조도</a></li><li><a href="../glossary.html">용어 사전</a></li></ul>
 </nav></header>
 
 <div class="container doc">
 <aside class="toc"><details open><summary>이 회차 목차</summary><ol id="toc"></ol></details></aside>
 <main>
 <header class="doc-head">
-  <div class="crumb"><a href="../">스터디 목차</a> / GPU 간 통신 / 9회차</div>
+  <div class="crumb"><a href="../">GPU 스터디</a> / GPU 간 통신 / 9회차</div>
   <h1>9회차 · NVLink, NVSwitch, P2P, GPUDirect 계열</h1>
   <p>지난 8회차에서는 CPU와 GPU 사이에서 데이터가 어떻게 움직이는지 봤습니다. 장치가 직접 데이터를 옮기는 DMA와, GPU 메모리를 바깥에 열어 보이는 창 BAR가 핵심이었습니다. 오늘은 GPU가 여러 장일 때, GPU끼리 어떻게 데이터를 주고받는지 보겠습니다.</p><p>오늘은 네 가지를 봅니다. 첫째는 GPU끼리 직접 잇는 전용 고속 연결, <b><button class="t" data-t="nvlink">NVLink</button></b>입니다. 둘째는 그 NVLink를 한곳에 모아 모든 GPU를 최고 속도로 잇는 스위치 칩, <b><button class="t" data-t="nvswitch">NVSwitch</button></b>입니다. 셋째는 CPU 메모리를 들르지 않고 GPU 메모리끼리 바로 주고받는 방식, <b><button class="t" data-t="p2p">P2P</button></b>입니다. 넷째는 이 직접 통신을 네트워크 카드와 스토리지까지 넓힌 기술 묶음, <b><button class="t" data-t="gpudirect">GPUDirect 계열</button></b>입니다.</p>
   <div class="flow" aria-label="주제별 진행 순서">

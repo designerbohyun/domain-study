@@ -12,14 +12,14 @@
 <body data-root="..">
 <header class="site"><nav class="container">
   <ul><li><a class="brand" href="../">도메인 스터디</a></li></ul>
-  <ul><li><a href="../">스터디 목차</a></li><li><a href="../structure.html">구조도</a></li><li><a href="../glossary.html">용어 사전</a></li></ul>
+  <ul><li><a href="../">GPU 스터디</a></li><li><a href="../network.html">네트워크 스터디</a></li><li><a href="../structure.html">구조도</a></li><li><a href="../glossary.html">용어 사전</a></li></ul>
 </nav></header>
 
 <div class="container doc">
 <aside class="toc"><details open><summary>이 회차 목차</summary><ol id="toc"></ol></details></aside>
 <main>
 <header class="doc-head">
-  <div class="crumb"><a href="../">스터디 목차</a> / GPU 기본 구조 / 4회차</div>
+  <div class="crumb"><a href="../">GPU 스터디</a> / GPU 기본 구조 / 4회차</div>
   <h1>4회차 · FP32, FP16, BF16, FP8, INT8</h1>
   <p>지난 3회차에서는 GPU에 일을 나누는 단위, 커널과 스레드와 warp를 봤습니다. 오늘은 그 스레드 하나하나가 계산하는 숫자 안으로 들어가 보겠습니다. 2회차 3.4에서 표로만 훑어본 FP32, FP16, BF16, FP8, INT8이 오늘의 주인공입니다.</p>
   <h3>오늘의 예시: 70B 모델을 H100 한 장에 올리기</h3>

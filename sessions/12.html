@@ -12,14 +12,14 @@
 <body data-root="..">
 <header class="site"><nav class="container">
   <ul><li><a class="brand" href="../">도메인 스터디</a></li></ul>
-  <ul><li><a href="../">스터디 목차</a></li><li><a href="../structure.html">구조도</a></li><li><a href="../glossary.html">용어 사전</a></li></ul>
+  <ul><li><a href="../">GPU 스터디</a></li><li><a href="../network.html">네트워크 스터디</a></li><li><a href="../structure.html">구조도</a></li><li><a href="../glossary.html">용어 사전</a></li></ul>
 </nav></header>
 
 <div class="container doc">
 <aside class="toc"><details open><summary>이 회차 목차</summary><ol id="toc"></ol></details></aside>
 <main>
 <header class="doc-head">
-  <div class="crumb"><a href="../">스터디 목차</a> / 서버 간 통신 / 12회차</div>
+  <div class="crumb"><a href="../">GPU 스터디</a> / 서버 간 통신 / 12회차</div>
   <h1>12회차 · Topology, Fat-tree, Leaf-Spine</h1>
   <p>지난 11회차에서는 서버와 서버를 잇는 부품을 봤습니다. RDMA라는 통신 방식, 그걸 실어 나르는 InfiniBand와 Ethernet, 그리고 서버에 꽂히는 NIC였습니다. 오늘은 그 부품을 어떤 모양으로 배치하는지 보겠습니다.</p><p>오늘은 세 가지를 봅니다. 첫째는 서버와 스위치를 잇는 모양 자체, <b><button class="t" data-t="topology">Topology</button></b>입니다. 토폴로지를 평가하는 지표도 함께 봅니다. 둘째는 위로 갈수록 연결을 굵게 해서 어디를 잘라도 대역폭이 줄지 않게 만든 대표 설계, <b><button class="t" data-t="fat-tree">Fat-tree</button></b>입니다. 셋째는 이 설계를 데이터센터에서 실제로 구현하는 2단 스위치 구조, <b><button class="t" data-t="leaf-spine">Leaf-Spine</button></b>입니다. GPU 클러스터용 변형인 Rail-optimized도 여기서 봅니다.</p>
   <div class="flow" aria-label="주제별 진행 순서">

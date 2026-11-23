@@ -12,14 +12,14 @@
 <body data-root="..">
 <header class="site"><nav class="container">
   <ul><li><a class="brand" href="../">도메인 스터디</a></li></ul>
-  <ul><li><a href="../">스터디 목차</a></li><li><a href="../structure.html">구조도</a></li><li><a href="../glossary.html">용어 사전</a></li></ul>
+  <ul><li><a href="../">GPU 스터디</a></li><li><a href="../network.html">네트워크 스터디</a></li><li><a href="../structure.html">구조도</a></li><li><a href="../glossary.html">용어 사전</a></li></ul>
 </nav></header>
 
 <div class="container doc">
 <aside class="toc"><details open><summary>이 회차 목차</summary><ol id="toc"></ol></details></aside>
 <main>
 <header class="doc-head">
-  <div class="crumb"><a href="../">스터디 목차</a> / GPU 기본 구조 / 2회차</div>
+  <div class="crumb"><a href="../">GPU 스터디</a> / GPU 기본 구조 / 2회차</div>
   <h1>2회차 · SM, CUDA Core, Tensor Core, Occupancy</h1>
   <p>지난 1회차에서는 GPU 칩이 GPC, TPC, SM 순서로 쌓여 있다는 것을 봤습니다. 오늘은 그중 실제로 계산을 하는 SM 안으로 들어가 보겠습니다. 이어서 SM 안의 계산 유닛인 CUDA Core와 Tensor Core를 차례로 봅니다. 마지막으로 SM을 얼마나 채워 쓰는지 재는 Occupancy까지 살펴보겠습니다.</p><p>진행 순서는 1회차와 같습니다. 주제마다 아래 열 가지를 차례대로 짚습니다. 기준 제품은 1회차와 마찬가지로 NVIDIA <button class="t" data-t="h100">H100</button>입니다.</p>
   <div class="flow" aria-label="주제별 진행 순서">

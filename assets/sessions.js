@@ -1,4 +1,5 @@
 // 스터디 목차. 회차 자료를 올리면 해당 줄의 page에 경로를 적는다.
+// study: "net"은 네트워크 도메인 스터디(network.html), 없으면 GPU 스터디(index.html). 네트워크 회차의 용어 s 값은 "N1"처럼 적는다.
 window.SESSIONS = [
   { no: 1,  track: "GPU 기본 구조",      topics: "GPU, GPGPU, CUDA", meet: "2026-10-13", page: "sessions/01.html" },
   { no: 2,  track: "GPU 기본 구조",      topics: "SM, CUDA Core, Tensor Core, Occupancy", meet: "2026-10-15", page: "sessions/02.html" },
@@ -22,5 +23,15 @@ window.SESSIONS = [
   { no: 20, track: "LLM 추론",           topics: "vLLM, TensorRT-LLM, Triton, KV Cache, PagedAttention, Continuous Batching", meet: "2026-12-17" },
   { no: 21, track: "LLM 추론",           topics: "Prefill, Decode, TTFT, TPOT, Quantization", meet: "2026-12-22" },
   { no: 22, track: "모니터링 운영",       topics: "Utilization 지표, Power, Temperature, PCIe·NVLink Throughput", meet: "2026-12-24" },
-  { no: 23, track: "모니터링 운영",       topics: "ECC·XID Error, DCGM, NVML, Prometheus, Grafana", meet: "2026-12-29" }
+  { no: 23, track: "모니터링 운영",       topics: "ECC·XID Error, DCGM, NVML, Prometheus, Grafana", meet: "2026-12-29" },
+  { study: "net", no: 1,  track: "논리적 경계",     topics: "경계는 무엇으로 그어지나 — 서브넷, VLAN, 관리망", page: "sessions/n01.html" },
+  { study: "net", no: 2,  track: "논리적 경계",     topics: "경계를 넘는 길 — 점프 서버, SSH 공개키, 기본 거부, 폐쇄망, 단일 장애점", page: "sessions/n02.html" },
+  { study: "net", no: 3,  track: "물리적 실체",     topics: "자리 — 랙과 전기" },
+  { study: "net", no: 4,  track: "물리적 실체",     topics: "선 — 포트와 스위치" },
+  { study: "net", no: 5,  track: "장비를 알아보기", topics: "실물을 찾아내기" },
+  { study: "net", no: 6,  track: "장비를 알아보기", topics: "장비에 닿는 길 — BMC" },
+  { study: "net", no: 7,  track: "장비를 다루기",   topics: "전원과 화면" },
+  { study: "net", no: 8,  track: "장비를 다루기",   topics: "설정을 바꾸는 일" },
+  { study: "net", no: 9,  track: "상태를 알기",     topics: "장비는 무엇을 알려 주는가" },
+  { study: "net", no: 10, track: "상태를 알기",     topics: "부품은 어떻게 죽는가" }
 ];

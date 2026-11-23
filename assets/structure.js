@@ -118,7 +118,7 @@
 
   const st = { v: "hw", lv: "cluster", sel: "server", find: null };
   const $ = id => document.getElementById(id);
-  const sessionLink = n => { const s = S.find(x => x.no === n); return s && s.page ? `<a href="${s.page}">${n}회차</a>` : `<span class="muted">${n}회차</span>`; };
+  const sessionLink = n => { const s = S.find(x => (x.study === "net" ? "N" + x.no : x.no) === n), l = typeof n === "string" ? `네트워크 ${n.slice(1)}회차` : `${n}회차`; return s && s.page ? `<a href="${s.page}">${l}</a>` : `<span class="muted">${l}</span>`; };
   const cls = (n, extra = "") => `node ${extra}${n === st.sel ? " sel" : ""}${st.find && termKeys(n).includes(st.find) ? " has" : ""}`;
 
   function box(c) {

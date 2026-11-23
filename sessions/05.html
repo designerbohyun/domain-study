@@ -12,14 +12,14 @@
 <body data-root="..">
 <header class="site"><nav class="container">
   <ul><li><a class="brand" href="../">도메인 스터디</a></li></ul>
-  <ul><li><a href="../">스터디 목차</a></li><li><a href="../structure.html">구조도</a></li><li><a href="../glossary.html">용어 사전</a></li></ul>
+  <ul><li><a href="../">GPU 스터디</a></li><li><a href="../network.html">네트워크 스터디</a></li><li><a href="../structure.html">구조도</a></li><li><a href="../glossary.html">용어 사전</a></li></ul>
 </nav></header>
 
 <div class="container doc">
 <aside class="toc"><details open><summary>이 회차 목차</summary><ol id="toc"></ol></details></aside>
 <main>
 <header class="doc-head">
-  <div class="crumb"><a href="../">스터디 목차</a> / GPU 메모리 / 5회차</div>
+  <div class="crumb"><a href="../">GPU 스터디</a> / GPU 메모리 / 5회차</div>
   <h1>5회차 · HBM, VRAM, Global·Shared Memory, Register, L1·L2 Cache</h1>
   <p>지난 4회차에서는 숫자 하나를 몇 비트로 저장하는지 봤습니다. 오늘은 그 숫자들이 머무는 곳, GPU 메모리 안으로 들어가 보겠습니다.</p><p>GPU 메모리는 한 덩어리가 아닙니다. 계산 유닛에서 가까울수록 빠르고 작고, 멀수록 느리고 큽니다. 오늘 볼 네 가지가 이 계층의 각 칸입니다. 기준 제품은 지난 회차와 같이 NVIDIA <button class="t" data-t="h100">H100</button> SXM입니다.</p>
   <div class="flow" aria-label="주제별 진행 순서">

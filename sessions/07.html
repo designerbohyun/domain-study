@@ -12,14 +12,14 @@
 <body data-root="..">
 <header class="site"><nav class="container">
   <ul><li><a class="brand" href="../">도메인 스터디</a></li></ul>
-  <ul><li><a href="../">스터디 목차</a></li><li><a href="../structure.html">구조도</a></li><li><a href="../glossary.html">용어 사전</a></li></ul>
+  <ul><li><a href="../">GPU 스터디</a></li><li><a href="../network.html">네트워크 스터디</a></li><li><a href="../structure.html">구조도</a></li><li><a href="../glossary.html">용어 사전</a></li></ul>
 </nav></header>
 
 <div class="container doc">
 <aside class="toc"><details open><summary>이 회차 목차</summary><ol id="toc"></ol></details></aside>
 <main>
 <header class="doc-head">
-  <div class="crumb"><a href="../">스터디 목차</a> / CPU-GPU 연결 / 7회차</div>
+  <div class="crumb"><a href="../">GPU 스터디</a> / CPU-GPU 연결 / 7회차</div>
   <h1>7회차 · PCIe, Lane, Gen4·5·6, Host Memory</h1>
   <p>지난 6회차에서는 메모리의 속도, 즉 대역폭과 지연을 봤습니다. 그리고 CPU 쪽 데이터를 GPU로 빠르게 보내는 방법으로 Pinned Memory를 봤습니다. 오늘은 그 데이터가 실제로 지나가는 길, CPU와 GPU 사이의 연결 안으로 들어가 보겠습니다.</p><p>CPU와 GPU는 <b><button class="t" data-t="pcie">PCIe</button></b>라는 표준 연결로 이어집니다. PCIe는 <b><button class="t" data-t="pcielane">Lane</button></b>, 우리말로 레인이라는 기본 길을 여러 개 묶어 씁니다. 그리고 <b>세대</b>가 하나 오를 때마다 레인 하나의 속도가 두 배가 됩니다. 이 길의 CPU 쪽 끝에 있는 메모리가 <b><button class="t" data-t="hostmem">Host Memory</button></b>입니다.</p>
   <div class="flow" aria-label="주제별 진행 순서">

@@ -12,14 +12,14 @@
 <body data-root="..">
 <header class="site"><nav class="container">
   <ul><li><a class="brand" href="../">도메인 스터디</a></li></ul>
-  <ul><li><a href="../">스터디 목차</a></li><li><a href="../structure.html">구조도</a></li><li><a href="../glossary.html">용어 사전</a></li></ul>
+  <ul><li><a href="../">GPU 스터디</a></li><li><a href="../network.html">네트워크 스터디</a></li><li><a href="../structure.html">구조도</a></li><li><a href="../glossary.html">용어 사전</a></li></ul>
 </nav></header>
 
 <div class="container doc">
 <aside class="toc"><details open><summary>이 회차 목차</summary><ol id="toc"></ol></details></aside>
 <main>
 <header class="doc-head">
-  <div class="crumb"><a href="../">스터디 목차</a> / GPU 간 통신 / 10회차</div>
+  <div class="crumb"><a href="../">GPU 스터디</a> / GPU 간 통신 / 10회차</div>
   <h1>10회차 · NCCL, AllReduce, AllGather, ReduceScatter</h1>
   <p>지난 9회차에서는 GPU끼리 잇는 길, NVLink와 NVSwitch, P2P, 그리고 GPUDirect를 봤습니다. 오늘은 그 길 위에서 여러 GPU가 데이터를 함께 합치고 나눠 갖는 방법, 집단 통신을 보겠습니다.</p><p>오늘은 네 가지를 봅니다. 첫째는 집단 통신을 실제로 수행하는 NVIDIA 라이브러리, <b><button class="t" data-t="nccl">NCCL</button></b>입니다. 둘째는 모두 합쳐서 모두에게 주는 <b><button class="t" data-t="allreduce">AllReduce</button></b>입니다. 셋째는 조각을 모아 모두에게 주는 <b><button class="t" data-t="allgather">AllGather</button></b>입니다. 넷째는 합친 뒤 조각내서 나눠 주는 <b><button class="t" data-t="reducescatter">ReduceScatter</button></b>입니다. 세 연산은 따로 노는 것이 아닙니다. <b>AllReduce는 ReduceScatter 다음에 AllGather를 한 것과 같습니다.</b></p>
   <div class="flow" aria-label="주제별 진행 순서">

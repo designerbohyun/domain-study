@@ -1,0 +1,590 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>1회차 · 경계는 무엇으로 그어지나 · 네트워크 도메인 스터디</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2.0.6/css/pico.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="../assets/site.css">
+<script>try{var t=localStorage.getItem("theme");if(t)document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
+</head>
+<body data-root="..">
+<header class="site"><nav class="container">
+  <ul><li><a class="brand" href="../">도메인 스터디</a></li></ul>
+  <ul><li><a href="../">GPU 스터디</a></li><li><a href="../network.html">네트워크 스터디</a></li><li><a href="../structure.html">구조도</a></li><li><a href="../glossary.html">용어 사전</a></li></ul>
+</nav></header>
+
+<div class="container doc">
+<aside class="toc"><details open><summary>이 회차 목차</summary><ol id="toc"></ol></details></aside>
+<main>
+<header class="doc-head">
+  <div class="crumb"><a href="../network.html">네트워크 스터디</a> / 논리적 경계 / 1회차</div>
+  <h1>1회차 · 경계는 무엇으로 그어지나</h1>
+  <p>오늘의 핵심 질문은 "서버 A가 다른 존의 서버 B에 접속하려면 무엇이 필요한가?"입니다. 이 질문에 답하려고 망을 나누는 경계 세 가지를 차례로 봅니다. 주소의 범위인 서브넷, 방송의 범위인 VLAN, 그리고 업무망과 따로 떼어 둔 관리망입니다. 마지막으로 이 경계들이 AstraBase 화면에 어떻게 나타나는지 맞춰 보겠습니다.</p>
+  <p>주제마다 아래 열 가지를 차례대로 짚습니다.</p>
+  <div class="flow" aria-label="주제별 진행 순서">
+    <span><b>1</b>정의</span><span><b>2</b>등장 배경</span><span><b>3</b>구조</span><span><b>4</b>작동 방식</span><span><b>5</b>이점</span><span><b>6</b>부재 시 문제</span><span><b>7</b>단점</span><span><b>8</b>대안 기술</span><span><b>9</b>대안과의 비교</span><span><b>10</b>최신 트렌드</span>
+  </div>
+</header>
+
+<!-- ============ PART 1 : 서브넷과 게이트웨이 ============ -->
+<div class="part" id="p1">
+  <div class="pk">PART 1</div>
+  <h2>서브넷과 게이트웨이 (Subnet·CIDR·Gateway)</h2>
+  <p>먼저 주소의 범위부터 보겠습니다. 어디까지가 같은 망이고, 밖으로는 어디로 나가는지입니다.</p>
+</div>
+
+<section class="ch" id="s1-1">
+  <div class="ch-head"><span class="ch-num">1.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="subnet">서브넷</button>은 <b>IP 주소 대역을 잘라 낸 한 조각</b>입니다. 같은 서브넷 안의 장비끼리는 게이트웨이를 거치지 않고 직접 통신합니다.</p>
+  <div class="prose">
+    <ul>
+      <li>IP 주소, 즉 장비에 붙이는 논리 주소는 앞쪽 네트워크 부분과 뒤쪽 호스트 부분으로 나뉩니다. 네트워크 부분이 같은 장비끼리 하나의 서브넷입니다.</li>
+      <li><b>CIDR 표기</b>와 <b>서브넷 마스크</b>는 어디까지가 네트워크 부분인지 알려 줍니다. <code>172.50.100.0/24</code>의 <code>/24</code>는 앞 24비트가 네트워크 부분이라는 뜻이고, 같은 내용을 마스크로 쓰면 <code>255.255.255.0</code>입니다.</li>
+      <li><b>게이트웨이</b>는 서브넷 밖으로 나가는 출구 주소입니다. 서브넷 안의 장비는 바깥으로 보낼 데이터를 모두 게이트웨이에 맡깁니다.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="ch" id="s1-2">
+  <div class="ch-head"><span class="ch-num">1.2</span><h2>등장 배경</h2></div>
+  <div class="prose">
+    <ul>
+      <li>초기 IPv4는 주소를 A, B, C 세 가지 크기로만 나눠 줬습니다. A는 약 1,677만 개, B는 6만 5천여 개, C는 256개였습니다.</li>
+      <li>장비가 300대인 곳은 C로는 모자라서 B를 받아야 했고, 6만 개 넘는 주소가 그대로 남았습니다.</li>
+      <li>크기가 제각각인 대역이 늘면서, 라우터가 기억해야 할 경로 표도 빠르게 커졌습니다.</li>
+    </ul>
+  </div>
+  <div class="callout idea">
+    <span class="say">"그럼 필요한 크기만큼 자유롭게 자르자!"</span>
+    그래서 등장한 것이 바로 <b><button class="t" data-t="cidr">CIDR</button></b>, Classless Inter-Domain Routing입니다.
+    <ul>
+      <li>네트워크 부분의 길이를 1비트 단위로 정할 수 있게 해서, 주소를 꼭 필요한 만큼만 나눠 줍니다.</li>
+      <li>1993년 RFC 1518과 RFC 1519로 정리됐습니다.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="ch" id="s1-3">
+  <div class="ch-head"><span class="ch-num">1.3</span><h2>구조</h2></div>
+  <h3>1. 네트워크 부분과 호스트 부분</h3>
+  <div class="prose">
+    <ul>
+      <li>IPv4 주소는 32비트입니다. 점으로 나눈 네 칸이 각각 0부터 255까지입니다.</li>
+      <li>마스크가 <code>/24</code>면 앞 세 칸이 네트워크 부분, 마지막 한 칸이 호스트 부분입니다. 마지막 칸만 바꿔 가며 장비에 주소를 줍니다.</li>
+    </ul>
+  </div>
+  <h3>2. 크기별 주소 수</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>CIDR</th><th>전체 주소 수</th><th>장비에 줄 수 있는 주소 수</th></tr></thead>
+    <tbody>
+      <tr><td><code>/16</code></td><td class="num">65,536</td><td class="num">65,534</td></tr>
+      <tr><td><code>/24</code></td><td class="num">256</td><td class="num">254</td></tr>
+      <tr><td><code>/26</code></td><td class="num">64</td><td class="num">62</td></tr>
+      <tr><td><code>/30</code></td><td class="num">4</td><td class="num">2</td></tr>
+    </tbody>
+  </table></div>
+  <div class="prose"><p>장비에 줄 수 있는 주소는 전체에서 2개를 뺀 수입니다. 맨 앞 주소는 서브넷 자체를 가리키는 네트워크 주소이고, 맨 끝 주소는 서브넷 전체에 방송할 때 쓰는 브로드캐스트 주소이기 때문입니다.</p></div>
+  <h3>3. 서브넷 안의 자리</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>자리</th><th>하는 일</th><th><code>/24</code> 예시</th></tr></thead>
+    <tbody>
+      <tr><td>네트워크 주소</td><td>서브넷 이름 역할</td><td><code>.0</code></td></tr>
+      <tr><td><button class="t" data-t="gateway">게이트웨이</button></td><td>서브넷 밖으로 나가는 출구</td><td>보통 <code>.1</code>이나 <code>.254</code></td></tr>
+      <tr><td>예약 주소</td><td>가상 IP처럼 특정 용도로 남겨 두는 주소</td><td>운영 규칙에 따라 다름</td></tr>
+      <tr><td>사용 가능 범위</td><td>장비에 나눠 줄 수 있는 주소</td><td>나머지</td></tr>
+      <tr><td>브로드캐스트 주소</td><td>서브넷 전체에 방송할 때 씀</td><td><code>.255</code></td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="ch" id="s1-4">
+  <div class="ch-head"><span class="ch-num">1.4</span><h2>작동 방식</h2></div>
+  <div class="prose">
+    <p>서버 A가 서버 B에게 데이터를 보낼 때, 먼저 "같은 서브넷인가"를 판단합니다.</p>
+    <ol>
+      <li><b>마스크 씌우기:</b> 내 IP 주소와 상대 IP 주소에 각각 서브넷 마스크를 씌워, 네트워크 부분만 남깁니다.</li>
+      <li><b>비교하기:</b> 두 네트워크 부분이 같으면 같은 서브넷입니다. 상대를 직접 찾아 보냅니다. 직접 찾는 방법은 PART 2에서 봅니다.</li>
+      <li><b>다르면 게이트웨이로:</b> 네트워크 부분이 다르면, 상대 대신 게이트웨이에게 보냅니다.</li>
+      <li><b>게이트웨이가 길을 찾음:</b> 게이트웨이는 자기 경로 표에서 목적지 서브넷으로 가는 다음 길을 찾아 넘깁니다.</li>
+      <li><b>돌아오는 길:</b> 답장도 같은 방식으로 상대 서브넷의 게이트웨이를 거쳐 돌아옵니다.</li>
+    </ol>
+    <p>예를 들어 <code>172.50.100.15/24</code>와 <code>172.50.100.200</code>은 네트워크 부분이 둘 다 <code>172.50.100.0</code>이라서 직접 통신합니다. <code>172.50.101.7</code>은 다르므로 게이트웨이를 거칩니다. (예시입니다)</p>
+  </div>
+</section>
+
+<section class="ch" id="s1-5">
+  <div class="ch-head"><span class="ch-num">1.5</span><h2>이점</h2></div>
+  <div class="prose">
+    <ul>
+      <li><b>주소를 아낍니다:</b> 장비 50대짜리 망에는 <code>/26</code>, 64개만 주면 됩니다. C 클래스 256개를 통째로 주던 때보다 약 4분의 1만 씁니다.</li>
+      <li><b>경로를 묶을 수 있습니다:</b> 이웃한 작은 서브넷 여러 개를 큰 대역 하나로 묶어 알려 주면, 라우터의 경로 표가 짧아집니다.</li>
+      <li><b>경계가 분명합니다:</b> 서브넷이 곧 직접 통신하는 범위입니다. 밖으로 나가는 길은 게이트웨이 하나뿐이라, 접근 규칙도 이 지점에 걸 수 있습니다.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="ch" id="s1-6">
+  <div class="ch-head"><span class="ch-num">1.6</span><h2>부재 시 문제</h2></div>
+  <div class="prose">
+    <ul>
+      <li>서브넷을 나누지 않는다고 가정해 보면, 모든 장비가 큰 대역 하나에 몰립니다. 방송이 모든 장비에 퍼지고, 장애가 나도 범위를 좁히기 어렵습니다.</li>
+      <li>클래스 방식으로 돌아간다고 가정해 보면, 필요보다 훨씬 큰 대역을 받게 됩니다. 남는 주소를 다른 곳에 쓸 수도 없습니다.</li>
+      <li>게이트웨이를 정해 두지 않으면, 서브넷 안 장비는 바깥과 전혀 통신하지 못합니다.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="ch" id="s1-7">
+  <div class="ch-head"><span class="ch-num">1.7</span><h2>단점</h2></div>
+  <div class="prose">
+    <ul>
+      <li><b>계산 실수가 장애가 됩니다:</b> 두 서브넷의 범위가 겹치면 어느 쪽으로 보내야 할지 정할 수 없어 통신이 끊깁니다. 마스크 하나만 잘못 적어도 생깁니다.</li>
+      <li><b>나중에 키우기 어렵습니다:</b> <code>/24</code>로 만든 서브넷이 꽉 차면, 옆 대역이 비어 있어야 넓힐 수 있습니다. 아니면 장비 주소를 전부 바꿔야 합니다.</li>
+      <li><b>게이트웨이가 한 곳에 몰립니다:</b> 게이트웨이 장비가 멈추면 서브넷 전체가 바깥과 끊깁니다. 1.8에서 봅니다.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="ch" id="s1-8">
+  <div class="ch-head"><span class="ch-num">1.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. <button class="t" data-t="vrrp">VRRP</button> (게이트웨이 이중화)</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 장비 두 대가 가상 게이트웨이 주소 하나를 함께 맡습니다. 평소에는 한 대가 일하고, 그 장비가 멈추면 다른 한 대가 같은 주소를 이어받습니다.</li>
+    <li><b>해결하는 단점:</b> 게이트웨이 한 곳에 몰리는 장애.</li>
+  </ul></div>
+  <h3>2. 대역 계획과 IPAM</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 서브넷을 만들기 전에 전체 대역을 용도별로 미리 잘라 두고, 겹치지 않는 다음 대역을 도구가 골라 주게 합니다. <button class="t" data-t="ipam">IPAM</button>, IP Address Management는 어느 대역을 어디에 썼는지 한곳에 기록하는 도구입니다.</li>
+    <li><b>해결하는 단점:</b> 겹치는 범위, 나중에 키우기 어려운 문제.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s1-9">
+  <div class="ch-head"><span class="ch-num">1.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>구분</th><th>클래스 방식</th><th>CIDR</th><th>IPv6 서브넷</th></tr></thead>
+    <tbody>
+      <tr><td>크기 정하기</td><td>A, B, C 세 가지</td><td>1비트 단위로 자유롭게</td><td>보통 <code>/64</code>로 고정</td></tr>
+      <tr><td>주소 낭비</td><td>큼</td><td>작음</td><td>신경 쓰지 않을 만큼 넉넉함</td></tr>
+      <tr><td>계산 부담</td><td>작음</td><td>중간</td><td>작음</td></tr>
+      <tr><td>지금 쓰임</td><td>사라짐</td><td>IPv4의 표준</td><td>IPv6의 표준</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="ch" id="s1-10">
+  <div class="ch-head"><span class="ch-num">1.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. IPv4 주소 값이 내려가고 있습니다</h3>
+  <div class="prose"><ul>
+    <li>2025년 하반기 IPv4 주소 거래는 481건, 약 305만 개였고 평균 가격은 주소 하나에 24.78달러였습니다. 2025년 4분기 평균은 23.16달러로, 1년 전보다 29.5% 낮았습니다. (IPv4Center, 2025)</li>
+  </ul></div>
+  <h3>2. 서브넷 대역을 도구가 골라 줍니다</h3>
+  <div class="prose"><ul>
+    <li>AWS VPC IPAM은 서브넷을 만드는 순간 알맞은 대역에서 CIDR을 자동으로 배정합니다. 2025년 11월에는 Infoblox IPAM에서 겹치지 않는 대역을 자동으로 받아 오는 기능도 나왔습니다. (AWS, 2025)</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span>서브넷은 "얼마나 크게, 어디부터 어디까지"를 정하는 일이고, 밖으로 나가는 문은 게이트웨이 하나입니다. <b>범위는 한 번 정하면 바꾸기 어려우니, 만들 때 겹치지 않는지 확인하는 단계가 가장 중요합니다.</b></div>
+</section>
+
+<!-- ============ PART 2 : VLAN과 L2·L3 ============ -->
+<div class="part" id="p2">
+  <div class="pk">PART 2</div>
+  <h2>VLAN과 L2·L3 (Virtual LAN, Layer 2·3)</h2>
+  <p>여기까지가 주소 범위와 출구였습니다. 이제 그 범위가 실제 스위치 위에서 어떻게 나뉘는지, VLAN과 L2·L3로 넘어가겠습니다.</p>
+</div>
+
+<section class="ch" id="s2-1">
+  <div class="ch-head"><span class="ch-num">2.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="vlan">VLAN</button>은 <b>스위치 한 대를 설정만으로 여러 개의 L2 구간으로 나누는 기술</b>입니다.</p>
+  <div class="prose">
+    <ul>
+      <li><b>L2</b>, 우리말로 데이터 링크 계층은 같은 구간 안에서 MAC 주소, 즉 네트워크 카드에 붙어 나오는 물리 주소로 데이터를 전달합니다. 대표 장비는 스위치입니다.</li>
+      <li><b>L3</b>, 즉 네트워크 계층은 IP 주소로 구간과 구간 사이를 잇습니다. 대표 장비는 라우터와 L3 스위치입니다.</li>
+      <li>같은 VLAN에 속한 포트끼리만 L2로 직접 통신합니다. 다른 VLAN으로 가려면 반드시 L3 장비를 거쳐야 합니다.</li>
+      <li>데이터센터에서는 보통 VLAN 하나에 서브넷 하나를 짝지어 씁니다. 이유는 2.3에서 봅니다.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="ch" id="s2-2">
+  <div class="ch-head"><span class="ch-num">2.2</span><h2>등장 배경</h2></div>
+  <div class="prose">
+    <ul>
+      <li>한 L2 구간에 장비가 많아지면, 구간 전체에 보내는 방송이 모든 장비에 쏟아집니다.</li>
+      <li>용도가 다른 장비를 떼어 놓고 싶어도 방법은 하나뿐이었습니다. 스위치를 따로 사고 케이블을 따로 까는 것입니다.</li>
+      <li>장비 자리를 옮기면 케이블도 다시 깔아야 했습니다.</li>
+    </ul>
+  </div>
+  <div class="callout idea">
+    <span class="say">"그럼 스위치 한 대를 논리적으로 쪼개 쓰자!"</span>
+    그래서 등장한 것이 바로 <b>VLAN</b>입니다.
+    <ul>
+      <li>프레임에 "나는 몇 번 VLAN 소속"이라는 표시를 붙여서, 같은 케이블과 같은 스위치 위에 여러 망을 겹쳐 올립니다.</li>
+      <li>표준은 1998년에 나온 IEEE 802.1Q입니다.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="ch" id="s2-3">
+  <div class="ch-head"><span class="ch-num">2.3</span><h2>구조</h2></div>
+  <h3>1. <button class="t" data-t="l2l3">L2와 L3</button></h3>
+  <div class="tbl"><table>
+    <thead><tr><th>계층</th><th>하는 일</th><th>쓰는 주소</th><th>대표 장비</th></tr></thead>
+    <tbody>
+      <tr><td>L2 데이터 링크 계층</td><td>같은 구간 안에서 카드와 카드 사이로 프레임을 전달합니다</td><td>MAC 주소</td><td>스위치</td></tr>
+      <tr><td>L3 네트워크 계층</td><td>구간과 구간 사이로 패킷을 전달합니다</td><td>IP 주소</td><td>라우터, L3 스위치</td></tr>
+    </tbody>
+  </table></div>
+  <div class="prose"><ul>
+    <li>두 주소를 이어 주는 것이 <button class="t" data-t="arp">ARP</button>, Address Resolution Protocol입니다. "이 IP 주소의 주인은 누구인가요?"라고 구간 전체에 방송하면, 주인이 자기 MAC 주소로 답합니다.</li>
+  </ul></div>
+  <h3>2. 태그와 포트</h3>
+  <div class="prose"><ul>
+    <li>802.1Q는 이더넷 프레임 안에 4바이트짜리 태그를 끼워 넣습니다. 그 안의 12비트가 VLAN ID입니다. 0번과 4095번은 예약돼 있어 1번부터 4094번까지 씁니다.</li>
+  </ul></div>
+  <div class="tbl"><table>
+    <thead><tr><th>포트 종류</th><th>하는 일</th><th>주로 연결하는 곳</th></tr></thead>
+    <tbody>
+      <tr><td>Access</td><td>VLAN 하나에만 속합니다. 태그 없는 프레임을 주고받습니다</td><td>서버</td></tr>
+      <tr><td><button class="t" data-t="trunk">Trunk</button></td><td>여러 VLAN을 한 포트로 함께 나릅니다. 태그를 붙인 채 보냅니다</td><td>다른 스위치, 가상화 서버</td></tr>
+    </tbody>
+  </table></div>
+  <h3>3. VLAN 하나에 서브넷 하나를 짝짓는 이유</h3>
+  <div class="prose"><ul>
+    <li>같은 서브넷이라고 판단한 장비는 ARP 방송으로 상대를 찾습니다. 이 방송이 닿는 범위가 L2 구간, 즉 VLAN입니다.</li>
+    <li>서브넷 하나가 두 VLAN에 나뉘어 있다고 해 보겠습니다. 같은 서브넷이라 믿고 보낸 방송이 반대쪽 VLAN에 닿지 않아 통신이 끊깁니다.</li>
+    <li>반대로 VLAN 하나에 서브넷 두 개를 섞으면, 서로 다른 서브넷인데 방송은 함께 받고, 접근 규칙을 어느 단위에 걸지 흐려집니다.</li>
+    <li>그래서 L2 구간과 L3 대역을 하나씩 짝짓고, 그 VLAN을 맡은 L3 장비의 주소를 게이트웨이로 둡니다. 현장에서 VLAN과 서브넷을 거의 같은 말처럼 부르는 이유입니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-4">
+  <div class="ch-head"><span class="ch-num">2.4</span><h2>작동 방식</h2></div>
+  <div class="prose">
+    <p>VLAN 100번 서버가 VLAN 101번 서버에게 보내는 순서입니다. VLAN 100번은 <code>172.50.100.0/24</code>, 101번은 <code>172.50.101.0/24</code>와 짝입니다. (예시입니다)</p>
+    <ol>
+      <li><b>다른 서브넷인지 판단:</b> 상대 주소의 네트워크 부분이 다르므로, 게이트웨이에게 보내기로 합니다.</li>
+      <li><b>게이트웨이 찾기:</b> VLAN 100번 안에 ARP를 방송해 게이트웨이의 MAC 주소를 얻습니다.</li>
+      <li><b>VLAN 안에서 전달:</b> 스위치는 VLAN 100번에 속한 포트 중에서 게이트웨이 쪽으로만 프레임을 보냅니다. 다른 스위치를 지나야 하면 Trunk 포트로 태그를 붙인 채 보냅니다.</li>
+      <li><b>L3에서 VLAN 바꾸기:</b> L3 스위치가 VLAN 100번의 게이트웨이 주소로 받아, 목적지 서브넷인 VLAN 101번으로 넘깁니다. 이 지점에서 통신을 허용할지 검사할 수 있습니다. 2회차에서 봅니다.</li>
+      <li><b>상대에게 도착:</b> VLAN 101번 안에서 다시 ARP로 상대의 MAC 주소를 찾아 전달합니다.</li>
+    </ol>
+  </div>
+</section>
+
+<section class="ch" id="s2-5">
+  <div class="ch-head"><span class="ch-num">2.5</span><h2>이점</h2></div>
+  <div class="prose">
+    <ul>
+      <li><b>방송이 줄어듭니다:</b> 방송은 같은 VLAN 안에서만 퍼집니다.</li>
+      <li><b>장비를 사지 않고 망을 나눕니다:</b> 스위치 설정만 바꾸면 됩니다. VLAN 번호만 해도 4094개를 만들 수 있습니다.</li>
+      <li><b>정책의 기준이 됩니다:</b> 망이 번호로 나뉘니, "VLAN 100번과 101번은 통신 금지" 같은 규칙을 걸 수 있습니다.</li>
+      <li><b>자리를 옮겨도 망은 그대로입니다:</b> 서버를 다른 랙으로 옮겨도 포트 설정만 같으면 같은 VLAN에 남습니다.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="ch" id="s2-6">
+  <div class="ch-head"><span class="ch-num">2.6</span><h2>부재 시 문제</h2></div>
+  <div class="prose">
+    <ul>
+      <li>VLAN이 없다고 가정해 보면, 한 스위치에 붙은 모든 서버가 한 구간에 섞입니다. 장비 관리용 트래픽과 서비스 트래픽이 같은 길을 씁니다.</li>
+      <li>고객사나 플랫폼마다 망을 나누려면 스위치를 따로 사야 합니다. 랙 공간과 전력, 비용이 함께 늘어납니다.</li>
+      <li>망을 바꿀 때마다 케이블 작업이 필요해서, 변경이 느리고 실수가 잦아집니다.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="ch" id="s2-7">
+  <div class="ch-head"><span class="ch-num">2.7</span><h2>단점</h2></div>
+  <div class="prose">
+    <ul>
+      <li><b>4094개가 한계입니다:</b> 고객이 수천 곳인 클라우드에서는 모자랍니다. 2.8의 VXLAN이 이 한계를 넘습니다.</li>
+      <li><b>스위치마다 설정이 맞아야 합니다:</b> Trunk 포트에 어떤 VLAN이 빠져 있으면 그 VLAN만 조용히 끊깁니다. 현장에서 아주 흔한 장애입니다. 4회차와 8회차에서 다시 봅니다.</li>
+      <li><b>구간을 넓히면 고리가 생길 수 있습니다:</b> 같은 VLAN을 여러 스위치에 걸치면 프레임이 빙빙 도는 루프를 막는 장치가 따로 필요합니다.</li>
+      <li><b>설정 실수가 보안 구멍이 됩니다:</b> 기본 VLAN을 잘못 두면 다른 VLAN으로 넘어가는 공격이 가능합니다.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="ch" id="s2-8">
+  <div class="ch-head"><span class="ch-num">2.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. <button class="t" data-t="vxlan">VXLAN</button></h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> L2 프레임을 통째로 L3 패킷 안에 넣어 나르는 기술입니다. 망 번호(VNI)가 24비트라서 약 1,677만 개까지 만들 수 있습니다. 2014년 RFC 7348로 정리됐습니다.</li>
+    <li><b>해결하는 단점:</b> 4094개 한계, 그리고 L2 구간을 멀리 넓힐 때 생기는 루프 문제.</li>
+  </ul></div>
+  <h3>2. EVPN</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> VXLAN으로 묶인 스위치들이 "어느 MAC 주소와 IP 주소가 어디에 있는지"를 BGP라는 경로 교환 방식으로 서로 알려 주는 기술입니다.</li>
+    <li><b>해결하는 단점:</b> 방송으로 묻고 답하던 과정을 줄이고, 스위치마다 따로 맞추던 설정을 자동으로 맞춥니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s2-9">
+  <div class="ch-head"><span class="ch-num">2.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>구분</th><th>VLAN</th><th><button class="t" data-t="evpn">VXLAN + EVPN</button></th><th>물리 분리</th></tr></thead>
+    <tbody>
+      <tr><td>나눌 수 있는 망 수</td><td class="num">4094개</td><td class="num">약 1,677만 개</td><td>스위치 수만큼</td></tr>
+      <tr><td>설정 난이도</td><td>낮음</td><td>높음</td><td>낮음 (대신 공사)</td></tr>
+      <tr><td>장비 요구</td><td>거의 모든 스위치</td><td>지원 스위치 필요</td><td>스위치 추가 구매</td></tr>
+      <tr><td>주로 쓰는 곳</td><td>기업 내부망, 단일 데이터센터</td><td>대형 클라우드, 멀티 테넌트 GPU 클러스터</td><td>보안 등급이 다른 망</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="ch" id="s2-10">
+  <div class="ch-head"><span class="ch-num">2.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. AI 데이터센터의 EVPN-VXLAN</h3>
+  <div class="prose"><ul>
+    <li>Juniper는 AI·ML 데이터센터용 EVPN-VXLAN 설계 안내서에서, 여러 LLM 작업이 한 패브릭을 함께 쓰면서도 테넌트별로 망을 떼어 놓는 구성을 다룹니다. (Juniper 문서, 2025)</li>
+  </ul></div>
+  <h3>2. 오픈 네트워크 OS, <button class="t" data-t="sonic">SONiC</button>의 확산</h3>
+  <div class="prose"><ul>
+    <li>Dell Enterprise SONiC 4.2는 EVPN 멀티호밍을 넣어, 서버 한 대를 두 스위치에 이중으로 붙이는 구성을 표준 방식으로 지원합니다. (Dell, 2025)</li>
+    <li>Cisco는 650 Group 조사를 인용해, SONiC 데이터센터 스위칭 매출이 2025년부터 2027년 사이 약 두 배로 늘어 80억 달러 수준이 될 것이라고 소개했습니다. (Cisco 블로그, 2025)</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>VLAN은 방송이 닿는 범위이고, 서브넷은 주소의 범위입니다.</b> 둘을 하나씩 짝지어야 "같은 서브넷이면 직접, 다르면 게이트웨이"라는 규칙이 그대로 맞아떨어집니다.</div>
+</section>
+
+<!-- ============ PART 3 : 관리망과 대역 외 관리 ============ -->
+<div class="part" id="p3">
+  <div class="pk">PART 3</div>
+  <h2>관리망과 대역 외 관리 (Out-of-Band Management)</h2>
+  <p>여기까지가 망을 논리적으로 나누는 방법이었습니다. 이제 같은 방법으로 업무망과 따로 떼어 둔 관리망으로 넘어가겠습니다.</p>
+</div>
+
+<section class="ch" id="s3-1">
+  <div class="ch-head"><span class="ch-num">3.1</span><h2>정의</h2></div>
+  <p class="lead"><button class="t" data-t="oob">대역 외 관리</button>는 <b>업무 데이터가 다니는 망과 따로 깐 관리 전용 망으로 장비를 다루는 방식</b>입니다. 영어로 Out-of-Band, 줄여서 OOB라고 부르고, 이 전용 망을 OOB 관리망이라고 합니다.</p>
+  <div class="prose">
+    <ul>
+      <li><b>업무망</b>은 서비스와 학습 데이터가 다니는 망입니다. 업무망과 서버 운영체제를 거쳐 들어가는 관리를 대역 내 관리, 즉 In-band라고 합니다. SSH 접속이 대표적입니다.</li>
+      <li><b>관리망</b>은 장비의 관리 포트만 모은 망입니다. 서버라면 BMC, 즉 메인보드에 붙은 관리 전용 컴퓨터의 포트가 여기에 붙습니다. BMC는 6회차에서 자세히 봅니다.</li>
+      <li>관리망은 운영체제와 업무망이 멈춰도 살아 있는 길입니다.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="ch" id="s3-2">
+  <div class="ch-head"><span class="ch-num">3.2</span><h2>등장 배경</h2></div>
+  <div class="prose"><p>서버에 SSH로만 들어가던 시절에는 업무망 스위치가 멈추거나 서버 네트워크 설정을 잘못 바꾸면 그 서버에 다시 들어갈 길이 사라졌습니다. 장애를 고치려고 쓰는 길이 장애 때문에 같이 끊기는 것입니다.</p></div>
+  <div class="callout idea">
+    <span class="say">"그럼 고치러 들어가는 길을 업무망과 아예 따로 깔아 두자!"</span>
+    그래서 등장한 것이 바로 <b>대역 외 관리</b>입니다.
+    <ul>
+      <li>처음에는 장비 시리얼 포트를 모아 주는 콘솔 서버로 시작했습니다.</li>
+      <li><button class="t" data-t="bmc">BMC</button>가 서버 기본 부품이 되면서, BMC 관리 포트만 모은 관리망이 데이터센터의 표준 구성이 되었습니다. BMC와 대화하는 표준 IPMI는 1998년에 발표됐습니다.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="ch" id="s3-3">
+  <div class="ch-head"><span class="ch-num">3.3</span><h2>구조</h2></div>
+  <h3>1. 관리망의 구성</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>구성</th><th>하는 일</th><th>예</th></tr></thead>
+    <tbody>
+      <tr><td>관리망 스위치</td><td>관리 포트들을 묶음</td><td>보통 1GbE</td></tr>
+      <tr><td>붙는 장비</td><td>관리 포트가 있는 장비</td><td>서버 BMC, 스위치 관리 포트, PDU 관리 포트</td></tr>
+      <tr><td>관리망 대역</td><td>업무망과 다른 서브넷과 VLAN을 씀</td><td>PART 1, PART 2의 방법 그대로</td></tr>
+      <tr><td>접근 통로</td><td>운영자는 정해진 길로만 관리망에 들어옴</td><td>VPN, 점프 서버 (2회차)</td></tr>
+      <tr><td>접근 규칙</td><td>관리망에 들어올 수 있는 대역을 운영팀으로 제한함</td><td>접근 제어 (2회차, 8회차)</td></tr>
+    </tbody>
+  </table></div>
+  <h3>2. 관리망으로 하는 일</h3>
+  <div class="prose"><ul>
+    <li><b>전원 제어:</b> 꺼진 서버를 켜고, 멈춘 서버를 다시 시작합니다. 7회차에서 봅니다.</li>
+    <li><b>원격 콘솔:</b> 서버 화면과 키보드를 네트워크로 넘겨받습니다. 7회차에서 봅니다.</li>
+    <li><b>상태 읽기:</b> 온도, 팬, 전원 공급 장치 상태를 읽습니다. 9회차에서 봅니다.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-4">
+  <div class="ch-head"><span class="ch-num">3.4</span><h2>작동 방식</h2></div>
+  <div class="prose">
+    <p>새벽에 서버 한 대가 업무망에서 응답하지 않는 경우를 예로 들어 보겠습니다.</p>
+    <ol>
+      <li><b>관리망 접속:</b> 운영자가 VPN이나 점프 서버를 거쳐 관리망에 들어갑니다.</li>
+      <li><b>관리 포트 확인:</b> 서버 BMC에 접속해 전원 상태와 센서를 봅니다. 업무망이 끊겨도 이 길은 살아 있습니다.</li>
+      <li><b>화면 확인:</b> 원격 콘솔로 운영체제의 마지막 메시지를 봅니다.</li>
+      <li><b>전원 조작:</b> 이 서버에서 다른 사람의 작업이 돌고 있지 않은지 확인한 뒤 다시 시작합니다.</li>
+      <li><b>결과 확인:</b> 부팅이 끝나는 것을 보고, 업무망에서 다시 접속되는지 확인합니다.</li>
+    </ol>
+  </div>
+</section>
+
+<section class="ch" id="s3-5">
+  <div class="ch-head"><span class="ch-num">3.5</span><h2>이점</h2></div>
+  <div class="prose">
+    <ul>
+      <li><b>장애 중에도 길이 있습니다:</b> 업무망이 멈춰도 관리망으로 장비에 닿습니다.</li>
+      <li><b>보안이 나뉩니다:</b> 전원을 끄고 화면을 넘겨받는 강한 권한을 업무망에서 떼어 두면, 업무망이 뚫려도 그 권한까지는 닿지 못합니다.</li>
+      <li><b>원격 처리 범위가 넓습니다:</b> 전원, BIOS, OS 설치까지 현장에 가지 않고 처리합니다.</li>
+      <li><b>업무 트래픽과 섞이지 않습니다:</b> 대규모 학습이 도는 고속망에 관리 트래픽이 끼어들지 않습니다.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="ch" id="s3-6">
+  <div class="ch-head"><span class="ch-num">3.6</span><h2>부재 시 문제</h2></div>
+  <div class="prose">
+    <p>관리망 없이 업무망 하나로만 운영한다고 가정해 보면 이런 일이 생깁니다.</p>
+    <ul>
+      <li>스위치 장애 하나에 서버도, 서버를 고칠 길도 함께 끊깁니다.</li>
+      <li>BMC가 업무망에 그대로 노출되어, 업무망 사용자 누구나 BMC 로그인 화면에 닿습니다.</li>
+      <li>서버 한 대가 멈출 때마다 누군가 전산실에 가야 합니다.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="ch" id="s3-7">
+  <div class="ch-head"><span class="ch-num">3.7</span><h2>단점</h2></div>
+  <div class="prose">
+    <ul>
+      <li><b>구축 비용이 듭니다:</b> 관리망 스위치, 케이블, 주소 대역을 따로 준비해야 합니다. 서버 160대면 관리 케이블도 160개가 더 필요합니다.</li>
+      <li><b>관리망 자체가 표적입니다:</b> 관리망 안에서는 강한 권한에 바로 닿습니다. 관리망 접근을 엄격히 막지 않으면 오히려 가장 위험한 망이 됩니다.</li>
+      <li><b>관리망도 끊길 수 있습니다:</b> 관리망 스위치가 하나뿐이면 그 스위치 장애에 원격 관리가 모두 멈춥니다.</li>
+      <li><b>공유 포트는 분리가 약합니다:</b> 일부 서버는 업무용 포트 하나를 BMC와 나눠 씁니다. 케이블은 줄지만 두 망이 같은 선을 탑니다.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="ch" id="s3-8">
+  <div class="ch-head"><span class="ch-num">3.8</span><h2>단점 극복을 위한 대안 기술</h2></div>
+  <h3>1. 콘솔 서버</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 스위치와 서버의 시리얼 포트를 한곳에 모아 원격으로 접속하게 하는 장비입니다.</li>
+    <li><b>해결하는 단점:</b> 관리망 스위치 자체가 멈췄을 때, 그 스위치의 콘솔로 들어가는 마지막 길이 됩니다.</li>
+  </ul></div>
+  <h3>2. 원격 제어 PDU</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 콘센트 단위로 전원을 켜고 끌 수 있는 PDU입니다. 3회차에서 다룹니다.</li>
+    <li><b>해결하는 단점:</b> BMC까지 멈춘 장비도 전원선을 뺐다 꽂은 효과로 되살립니다.</li>
+  </ul></div>
+  <h3>3. 셀룰러 백업 회선</h3>
+  <div class="prose"><ul>
+    <li><b>뜻:</b> 관리망에 LTE 같은 이동통신 회선을 하나 더 붙여, 회사망 전체가 끊겨도 관리망에 닿게 하는 방식입니다.</li>
+    <li><b>해결하는 단점:</b> 관리망으로 들어오는 바깥 길 자체가 끊기는 상황.</li>
+  </ul></div>
+</section>
+
+<section class="ch" id="s3-9">
+  <div class="ch-head"><span class="ch-num">3.9</span><h2>대안과의 비교</h2></div>
+  <div class="tbl"><table>
+    <thead><tr><th>구분</th><th>대역 내 관리</th><th>전용 관리망</th><th>공유 포트</th><th>콘솔 서버</th></tr></thead>
+    <tbody>
+      <tr><td>지나는 길</td><td>업무망과 운영체제</td><td>관리망과 BMC</td><td>업무용 선 하나에 둘 다</td><td>시리얼 선</td></tr>
+      <tr><td>OS 멈춤 시</td><td>멈춤</td><td>동작</td><td>동작</td><td>동작</td></tr>
+      <tr><td>업무망 장애 시</td><td>멈춤</td><td>동작</td><td>함께 멈출 수 있음</td><td>동작</td></tr>
+      <tr><td>비용</td><td>없음</td><td>스위치와 케이블 추가</td><td>작음</td><td>장비 추가</td></tr>
+      <tr><td>역할</td><td>평소 작업</td><td>기본 관리 통로</td><td>작은 구성</td><td>네트워크 장비의 마지막 길</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="ch" id="s3-10">
+  <div class="ch-head"><span class="ch-num">3.10</span><h2>최신 트렌드</h2></div>
+  <h3>1. BMC 취약점이 실제 공격 목록에 오르다</h3>
+  <div class="prose"><ul>
+    <li>미국 CISA는 2025년 6월 AMI MegaRAC BMC 펌웨어의 인증 우회 취약점 CVE-2024-54085를 "실제로 악용되는 취약점" 목록에 올렸습니다. 심각도 점수는 최고점인 10.0입니다.</li>
+    <li>이 취약점을 찾은 보안 회사 Eclypsium은 당시 인터넷에 그대로 노출된 MegaRAC BMC가 약 2,000개라고 밝혔습니다. 관리망을 업무망과 인터넷에서 떼어 두는 일이 다시 강조되었습니다.</li>
+  </ul></div>
+  <h3>2. 관리망 안에서도 암호화를 기본으로</h3>
+  <div class="prose"><ul>
+    <li>BMC 관리 표준 <button class="t" data-t="redfish">Redfish</button>는 2025.3 릴리스에서 BMC가 인증서를 자동으로 받고 갱신하는 기능을 넣었습니다. (DMTF, 2025)</li>
+    <li>관리망을 "안쪽이니 안전한 곳"으로 보지 않고, 그 안에서도 암호화와 인증을 기본값으로 두는 흐름입니다.</li>
+  </ul></div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span>관리망은 고치러 들어가는 길을 업무망과 따로 둔 것입니다. <b>그 길은 강한 권한으로 이어지므로, 관리망에 누가 들어올 수 있는지를 반드시 좁혀야 합니다.</b></div>
+</section>
+
+<!-- ============ PART 4 : AstraBase에서는 ============ -->
+<div class="part" id="p4">
+  <div class="pk">PART 4</div>
+  <h2>AstraBase에서는</h2>
+  <p>여기까지가 관리망이었습니다. 마지막으로 오늘 본 경계들이 AstraBase 화면에 어떻게 나타나는지, 그리고 핵심 질문의 답을 맞춰 보겠습니다.</p>
+</div>
+
+<section class="ch" id="s4-1">
+  <div class="ch-head"><span class="ch-num">4.1</span><h2>오늘 볼 화면</h2></div>
+  <div class="prose">
+    <ul>
+      <li><b>서브넷 관리:</b> 네트워크 그룹의 메뉴입니다. 서브넷 하나와 VLAN 하나를 짝지어 기록합니다. AICM 화면 목록에는 클러스터, VLAN, 이름, 네트워크 주소, 게이트웨이, DNS, 사용 가능 IP 범위, 예약 IP, 연결된 플랫폼, 바인딩 포트 수가 나옵니다.</li>
+      <li><b><button class="t" data-t="mgmtzone">관리 영역</button>:</b> 같은 접속 경로로 접속하는 장비의 묶음입니다. AICM 화면의 "클러스터" 칸이 같은 개념입니다. 사내에서는 관리 존, 존이라고도 부르지만 화면 표기는 관리 영역입니다.</li>
+    </ul>
+    <p>예를 들어 VLAN 100번 서브넷이 <code>172.50.100.0/24</code>라면 게이트웨이는 <code>172.50.100.254</code>입니다. 네트워크 주소 <code>.0</code>, 브로드캐스트 주소 <code>.255</code>, 게이트웨이 <code>.254</code>를 뺀 나머지가 장비에 줄 수 있는 주소입니다. (예시입니다)</p>
+  </div>
+</section>
+
+<section class="ch" id="s4-2">
+  <div class="ch-head"><span class="ch-num">4.2</span><h2>서브넷 관리의 규칙</h2></div>
+  <div class="prose"><p>오늘 배운 개념이 서브넷 관리의 규칙으로 그대로 들어가 있습니다.</p></div>
+  <div class="tbl"><table>
+    <thead><tr><th>규칙</th><th>이유</th><th>이번 회차의 어디</th></tr></thead>
+    <tbody>
+      <tr><td>VLAN은 1~4094</td><td>802.1Q 태그의 12비트 범위</td><td>2.3</td></tr>
+      <tr><td>같은 관리 영역 안에서 VLAN이 겹치지 않음</td><td>VLAN 하나에 서브넷 하나</td><td>2.3</td></tr>
+      <tr><td>마스크 길이 8~30, 마스크에 맞게 정렬된 주소</td><td>네트워크 부분과 호스트 부분이 맞아야 함</td><td>1.3</td></tr>
+      <tr><td>같은 관리 영역 안에서 주소 범위가 겹치지 않음</td><td>겹치면 어느 VLAN으로 보낼지 정할 수 없음</td><td>1.7</td></tr>
+      <tr><td>다른 관리 영역끼리는 범위가 겹쳐도 됨</td><td>망이 떨어져 있어 부딪히지 않음</td><td>4.3</td></tr>
+      <tr><td>게이트웨이는 브로드캐스트 주소 바로 앞, AstraBase가 정함</td><td>출구 자리를 통일해 잘못된 출구를 막음</td><td>1.3</td></tr>
+      <tr><td>만든 뒤에는 이름과 예약 IP만 수정</td><td>범위를 옮기면 주소와 규칙이 밖으로 밀려남</td><td>1.7</td></tr>
+      <tr><td>관리망은 서브넷 종류로 두지 않음</td><td>장비를 찾는 주소 범위는 스캔 대역으로 따로 다룸</td><td>PART 3, 4.3</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section class="ch" id="s4-3">
+  <div class="ch-head"><span class="ch-num">4.3</span><h2>관리 영역</h2></div>
+  <div class="prose">
+    <ul>
+      <li>관리 영역은 <b>AstraBase가 장비에 닿는 길</b>을 기준으로 묶은 경계입니다. 서브넷이 주소의 경계, VLAN이 방송의 경계라면, 관리 영역은 접속 경로의 경계입니다.</li>
+      <li><b>접속 방식</b>은 두 가지입니다. 다른 서버를 거치지 않는 <b>바로 접속</b>, 그리고 중간 서버를 거쳐 들어가는 <b>점프 서버</b>입니다. 점프 서버는 2회차에서 봅니다.</li>
+      <li>AstraBase를 설치하면 <b>기본 관리 영역</b>이 하나 만들어지고, 접속 방식은 바로 접속입니다.</li>
+      <li><b>스캔 대역</b>은 관리 영역 안에서 장비를 찾는 주소 범위입니다. <code>192.168.50.0/24</code>처럼 CIDR로 적습니다. 장비를 찾는 과정은 5회차에서 봅니다. (예시입니다)</li>
+      <li>관리 영역이 다르면 망이 떨어져 있다고 봅니다. 그래서 두 관리 영역이 같은 주소 대역을 써도 됩니다. 고객사 두 곳이 모두 <code>192.168.0.0/16</code>을 쓰는 경우가 흔하기 때문입니다.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="ch" id="s4-4">
+  <div class="ch-head"><span class="ch-num">4.4</span><h2>핵심 질문에 답하기</h2></div>
+  <div class="prose">
+    <p>"서버 A가 다른 관리 영역의 서버 B에 접속하려면 무엇이 필요한가?"를 경계마다 하나씩 넘어 보겠습니다.</p>
+    <ol>
+      <li><b>같은 서브넷인가:</b> 같으면 같은 VLAN 안에서 ARP로 상대를 찾아 바로 보냅니다. 게이트웨이도 필요 없습니다.</li>
+      <li><b>서브넷이 다르면 게이트웨이:</b> 두 VLAN을 잇는 L3 장비와, 서로에게 가는 경로가 필요합니다. 2.4의 흐름입니다.</li>
+      <li><b>길이 있어도 허락이 필요:</b> 서브넷 사이 통신을 허용하는 접근 규칙이 있어야 합니다. 2회차의 접근 제어에서 봅니다.</li>
+      <li><b>관리 영역이 다르면 중계가 필요:</b> 관리 영역이 다르면 망이 떨어져 있고, 주소가 겹칠 수도 있습니다. 경로만으로 닿는다고 가정할 수 없어서, 중간에서 접속을 이어 주는 점프 서버 같은 길이 필요합니다. 2회차에서 봅니다.</li>
+      <li><b>관리 목적이면 관리망으로:</b> 전원을 켜고 끄는 일처럼 장비를 다루는 접속은 업무망이 아니라 관리망을 지납니다. PART 3의 내용입니다.</li>
+    </ol>
+  </div>
+  <div class="callout"><span class="ck">꼭 알아 둘 것</span><b>경계는 세 겹입니다.</b> 서브넷은 주소의 범위, VLAN은 방송의 범위, 관리 영역은 접속 경로의 범위입니다. 경계를 넘으려면 출구인 게이트웨이, 허용하는 규칙, 이어 주는 중계 서버가 필요합니다.</div>
+</section>
+
+<section class="ch" id="refs">
+  <div class="ch-head"><span class="ch-num">+</span><h2>참고</h2></div>
+  <div class="prose"><ul>
+    <li><a href="https://www.rfc-editor.org/rfc/rfc1518" target="_blank" rel="noopener">RFC 1518 An Architecture for IP Address Allocation with CIDR (1993)</a></li>
+    <li><a href="https://www.rfc-editor.org/rfc/rfc1519" target="_blank" rel="noopener">RFC 1519 Classless Inter-Domain Routing (CIDR) (1993)</a></li>
+    <li><a href="https://www.rfc-editor.org/rfc/rfc7348" target="_blank" rel="noopener">RFC 7348 Virtual eXtensible Local Area Network (VXLAN) (2014)</a></li>
+    <li><a href="https://docs.aws.amazon.com/vpc/latest/ipam/what-it-is-ipam.html" target="_blank" rel="noopener">AWS VPC IP Address Manager (IPAM) 문서</a></li>
+    <li><a href="https://sonicfoundation.dev/" target="_blank" rel="noopener">SONiC Foundation</a></li>
+    <li><a href="https://www.cisa.gov/known-exploited-vulnerabilities-catalog" target="_blank" rel="noopener">CISA Known Exploited Vulnerabilities Catalog</a></li>
+    <li><a href="https://nvd.nist.gov/vuln/detail/CVE-2024-54085" target="_blank" rel="noopener">NVD CVE-2024-54085 (AMI MegaRAC BMC)</a></li>
+    <li><a href="https://www.dmtf.org/standards/redfish" target="_blank" rel="noopener">DMTF Redfish</a></li>
+  </ul></div>
+</section>
+
+<nav class="pager" id="pager" data-no="N1" aria-label="회차 이동"></nav>
+</main>
+</div>
+
+<footer class="site"><div class="container">자료의 오류나 보충할 내용은 <a href="https://github.com/designerbohyun/domain-study/issues">GitHub 이슈</a>로 알려 주세요.</div></footer>
+<script src="../assets/terms.js"></script>
+<script src="../assets/sessions.js"></script>
+<script src="../assets/site.js"></script>
+</body>
+</html>

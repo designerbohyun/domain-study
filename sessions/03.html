@@ -12,14 +12,14 @@
 <body data-root="..">
 <header class="site"><nav class="container">
   <ul><li><a class="brand" href="../">도메인 스터디</a></li></ul>
-  <ul><li><a href="../">스터디 목차</a></li><li><a href="../structure.html">구조도</a></li><li><a href="../glossary.html">용어 사전</a></li></ul>
+  <ul><li><a href="../">GPU 스터디</a></li><li><a href="../network.html">네트워크 스터디</a></li><li><a href="../structure.html">구조도</a></li><li><a href="../glossary.html">용어 사전</a></li></ul>
 </nav></header>
 
 <div class="container doc">
 <aside class="toc"><details open><summary>이 회차 목차</summary><ol id="toc"></ol></details></aside>
 <main>
 <header class="doc-head">
-  <div class="crumb"><a href="../">스터디 목차</a> / GPU 기본 구조 / 3회차</div>
+  <div class="crumb"><a href="../">GPU 스터디</a> / GPU 기본 구조 / 3회차</div>
   <h1>3회차 · Kernel, Thread, Block, Grid, Warp</h1>
   <p>지난 2회차에서는 SM 안을 들여다봤습니다. 블록이 SM에 배정되고, Warp Scheduler가 warp를 골라 실행한다는 것까지 봤습니다. 오늘은 그 일감이 프로그램 쪽에서 어떻게 쪼개지는지 보겠습니다. 2회차 1.4 표에서 이름만 보고 지나간 커널, 블록, warp, 스레드가 오늘의 주인공입니다.</p>
   <h3>오늘의 예시: 숫자 100만 개에 2 곱하기</h3>

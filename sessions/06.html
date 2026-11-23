@@ -12,14 +12,14 @@
 <body data-root="..">
 <header class="site"><nav class="container">
   <ul><li><a class="brand" href="../">도메인 스터디</a></li></ul>
-  <ul><li><a href="../">스터디 목차</a></li><li><a href="../structure.html">구조도</a></li><li><a href="../glossary.html">용어 사전</a></li></ul>
+  <ul><li><a href="../">GPU 스터디</a></li><li><a href="../network.html">네트워크 스터디</a></li><li><a href="../structure.html">구조도</a></li><li><a href="../glossary.html">용어 사전</a></li></ul>
 </nav></header>
 
 <div class="container doc">
 <aside class="toc"><details open><summary>이 회차 목차</summary><ol id="toc"></ol></details></aside>
 <main>
 <header class="doc-head">
-  <div class="crumb"><a href="../">스터디 목차</a> / GPU 메모리 / 6회차</div>
+  <div class="crumb"><a href="../">GPU 스터디</a> / GPU 메모리 / 6회차</div>
   <h1>6회차 · Bandwidth, Latency, Coalesced Access, Unified·Pinned Memory</h1>
   <p>지난 5회차에서는 GPU 메모리의 칸들, 즉 레지스터, Shared Memory, L1과 L2 캐시, VRAM을 봤습니다. 오늘은 그 칸들 사이를 데이터가 얼마나 많이, 얼마나 빨리 오가는지 보겠습니다.</p><p>메모리 성능은 두 숫자로 봅니다. 1초에 얼마나 많이 옮기느냐가 <b><button class="t" data-t="bandwidth">대역폭</button></b>이고, 요청한 뒤 첫 데이터가 올 때까지 얼마나 걸리느냐가 <b><button class="t" data-t="lat">지연</button></b>입니다. 그리고 이 두 숫자를 실제로 잘 쓰는 방법이 두 가지 있습니다. GPU 안에서는 <b>병합 접근</b>, CPU와 GPU 사이에서는 <b>Pinned Memory와 Unified Memory</b>입니다.</p>
   <div class="flow" aria-label="주제별 진행 순서">
